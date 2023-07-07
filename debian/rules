@@ -1,4 +1,11 @@
 #!/usr/bin/make -f
+export DEB_BUILD_MAINT_OPTIONS=hardening=+all future=+lfs
+
+D := $(CURDIR)/debian/fort-validator
 
 %:
 	dh $@
+
+override_dh_installsystemd:
+	dh_installsystemd --name fort
+
