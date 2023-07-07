@@ -1,0 +1,32 @@
+--- a/src/config.c
++++ b/src/config.c
+@@ -983,13 +983,18 @@ set_default_values(void)
+ 	rpki_config.server.interval.expire = 7200;
+ 	rpki_config.server.deltas_lifetime = 2;
+ 
+-	rpki_config.tal = NULL;
++	rpki_config.tal = strdup("/etc/tals");
++	if (rpki_config.tal == NULL) {
++		error = pr_enomem();
++		goto revert_port;
++	}
++
+ 	rpki_config.slurm = NULL;
+ 
+ 	rpki_config.local_repository = strdup("/var/lib/fort");
+ 	if (rpki_config.local_repository == NULL) {
+ 		error = pr_enomem();
+-		goto revert_port;
++		goto revert_tal;
+ 	}
+ 
+ 	rpki_config.sync_strategy = RSYNC_ROOT_EXCEPT_TA;
+@@ -1096,6 +1101,8 @@ revert_rsync_program:
+ 	free(rpki_config.rsync.program);
+ revert_repository:
+ 	free(rpki_config.local_repository);
++revert_tal:
++	free(rpki_config.tal);
+ revert_port:
+ 	free(rpki_config.server.port);
+ revert_address:

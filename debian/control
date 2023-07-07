@@ -1,15 +1,26 @@
-Source: template-repository
-Section: unknown
+Source: fort-validator
+Section: net
 Priority: optional
-Maintainer: Tsic404 <liuheng@deepin.org>
-Build-Depends: debhelper (>= 11)
-Standards-Version: 4.1.3
-Homepage: https://github.com/deepin-community/template-repository
-#Vcs-Browser: https://salsa.debian.org/debian/deepin-community-template-repository
-#Vcs-Git: https://salsa.debian.org/debian/deepin-community-template-repository.git
+Maintainer: Marco d'Itri <md@linux.it>
+Build-Depends: debhelper-compat (= 13),
+ dh-sequence-installsysusers, debhelper (>= 13.9),
+ check,
+ pkg-config,
+ libcurl4-openssl-dev,
+ libjansson-dev,
+ libssl-dev,
+ libxml2-dev,
+Standards-Version: 4.6.2.0
+Rules-Requires-Root: no
+Homepage: https://nicmx.github.io/FORT-validator/
+Vcs-Git: https://salsa.debian.org/md/fort-validator.git
+Vcs-Browser: https://salsa.debian.org/md/fort-validator
 
-Package: template-repository
+Package: fort-validator
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: <insert up to 60 chars description>
- <insert long description, indented with spaces>
+Multi-Arch: foreign
+Depends: ${shlibs:Depends}, ${misc:Depends}, rsync,
+ rpki-trust-anchors,
+Description: RPKI validator and RTR server
+ FORT validator is an RPKI relying party software: it performs the
+ validation of the RPKI repository and serves the ROAs to the routers.

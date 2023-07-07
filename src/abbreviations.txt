@@ -1,0 +1,37 @@
+This file lists the abbreviations used through the code.
+(Standard C, dependency and RFC-defined abbreviations are generally excluded.)
+If you find an abbreviation that is not listed here, feel free to report it as
+a bug.
+
+addr: address
+addr4: IPv4 address
+addr6: IPv6 address
+be: Big Endian
+cert: certificate
+certstack: certificate stack
+db: database
+eof: end of file
+err: error
+fd: File Descriptor (see `man 2 accept`)
+guri: global URI
+hdr: header
+id: identifier
+len: length
+max: maximum
+min: minimum
+msg: message
+pdu: Protocol Data Unit (RFC 6810)
+pp: Publication Point
+pr: print
+ptr: pointer
+refget: reference get (+1 to reference counter)
+refput: reference put (-1 to reference counter)
+rk: Router Key
+rpp: Repository Publication Point
+str: string
+tmp: temporal
+uint: unsigned int
+vrp: Validated ROA Payload (RFC 6811)
+vrps: Validated ROA Payloads (VRP database)
+
+Single-character variables are always generic counters.
