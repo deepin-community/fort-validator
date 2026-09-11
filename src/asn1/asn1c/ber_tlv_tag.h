@@ -5,9 +5,11 @@
 #ifndef	_BER_TLV_TAG_H_
 #define	_BER_TLV_TAG_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 enum asn_tag_class {
 	ASN_TAG_CLASS_UNIVERSAL		= 0,	/* 0b00 */
@@ -52,9 +54,5 @@ ssize_t ber_fetch_tag(const void *bufptr, size_t size, ber_tlv_tag_t *tag_r);
  * against the supplied buffer's size.
  */
 size_t ber_tlv_tag_serialize(ber_tlv_tag_t tag, void *bufptr, size_t size);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif	/* _BER_TLV_TAG_H_ */

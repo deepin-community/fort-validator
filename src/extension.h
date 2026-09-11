@@ -1,20 +1,25 @@
 #ifndef SRC_EXTENSION_H_
 #define SRC_EXTENSION_H_
 
-#include <stdbool.h>
+#include <jansson.h>
+#include <openssl/asn1.h>
+#include <openssl/safestack.h>
 #include <openssl/x509.h>
+#include <stdbool.h>
 
 struct extension_metadata {
 	char const *name;
 	int nid;
 	bool critical;
+	json_t *(*to_json)(void const *);
+	void (*destructor)(void *);
 };
 
 struct extension_handler {
 	struct extension_metadata const *meta;
 	bool mandatory;
 
-	int (*cb)(X509_EXTENSION *, void *);
+	int (*cb)(void *, void *);
 	void *arg;
 
 	/* For internal use */
@@ -38,11 +43,13 @@ struct extension_metadata const *ext_ar2(void);
 struct extension_metadata const *ext_cn(void);
 struct extension_metadata const *ext_eku(void);
 
+struct extension_metadata const **ext_metadatas(void);
+
 int handle_extensions(struct extension_handler *,
     STACK_OF(X509_EXTENSION) const *);
 
 int cannot_decode(struct extension_metadata const *);
 int validate_public_key_hash(X509 *, ASN1_OCTET_STRING *);
-int handle_aki(X509_EXTENSION *, void *);
+int handle_aki(void *, void *);
 
 #endif /* SRC_EXTENSION_H_ */

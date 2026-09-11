@@ -1,6 +1,5 @@
 #include "types/vrp.h"
 
-#include <arpa/inet.h>
 #include "log.h"
 #include "types/address.h"
 
@@ -17,10 +16,11 @@ vrp_equals(struct vrp const *a, struct vrp const *b)
 	case AF_INET:
 		return a->prefix.v4.s_addr == b->prefix.v4.s_addr;
 	case AF_INET6:
-		return IN6_ARE_ADDR_EQUAL(&a->prefix.v6, &b->prefix.v6);
+		return addr6_equals(&a->prefix.v6, &b->prefix.v6);
 	}
 
 	pr_crit("Unknown address family: %u", a->addr_fam);
+	return false; /* Warning shutupper */
 }
 
 /* Checks if a's prefix equals or covers b's prefix */
@@ -40,6 +40,7 @@ vrp_prefix_cov(struct vrp const *a, struct vrp const *b)
 	}
 
 	pr_crit("Unknown address family: %u", a->addr_fam);
+	return false; /* Warning shutupper */
 }
 
 int

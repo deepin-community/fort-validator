@@ -2,7 +2,6 @@
 #define SRC_TYPES_ROUTER_KEY_H_
 
 #include <stdint.h>
-#include <stdlib.h>
 
 /*
  * SKI is always 20 bytes long rfc6487#section-4.8.2:

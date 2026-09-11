@@ -1,8 +1,6 @@
 #include "types/address.h"
 
-#include <stdlib.h> /* strtoul() */
-#include <string.h> /* memset(), memcpy() */
-#include <arpa/inet.h> /* inet_ntop(), htonl() */
+#include <errno.h>
 
 #include "log.h"
 #include "thread_var.h"
@@ -133,6 +131,17 @@ ipv6_suffix_mask(unsigned int prefix_len, struct in6_addr *result)
 }
 
 bool
+addr6_equals(struct in6_addr const *a, struct in6_addr const *b)
+{
+	unsigned int i;
+	for (i = 0; i < INET_ADDRSTRLEN; i++) {
+		if (a->s6_addr[i] != b->s6_addr[i])
+			return false;
+	}
+	return true;
+}
+
+bool
 prefix4_equals(struct ipv4_prefix const *a, struct ipv4_prefix const *b)
 {
 	return (a->len == b->len) && (a->addr.s_addr == b->addr.s_addr);
@@ -141,7 +150,7 @@ prefix4_equals(struct ipv4_prefix const *a, struct ipv4_prefix const *b)
 bool
 prefix6_equals(struct ipv6_prefix const *a, struct ipv6_prefix const *b)
 {
-	return (a->len == b->len) && IN6_ARE_ADDR_EQUAL(&a->addr, &b->addr);
+	return (a->len == b->len) && addr6_equals(&a->addr, &b->addr);
 }
 
 /**
@@ -521,7 +530,7 @@ addr2str6(struct in6_addr const *addr, char *buffer)
 /**
  * buffer must length INET6_ADDRSTRLEN.
  */
-void
+bool
 sockaddr2str(struct sockaddr_storage *sockaddr, char *buffer)
 {
 	void *addr = NULL;
@@ -529,7 +538,7 @@ sockaddr2str(struct sockaddr_storage *sockaddr, char *buffer)
 
 	if (sockaddr == NULL) {
 		strcpy(buffer, "(null)");
-		return;
+		return false;
 	}
 
 	switch (sockaddr->ss_family) {
@@ -541,11 +550,14 @@ sockaddr2str(struct sockaddr_storage *sockaddr, char *buffer)
 		break;
 	default:
 		strcpy(buffer, "(protocol unknown)");
-		return;
+		return false;
 	}
 
 	str = inet_ntop(sockaddr->ss_family, addr, buffer, INET6_ADDRSTRLEN);
-	if (str == NULL)
+	if (str == NULL) {
 		strcpy(buffer, "(unprintable address)");
-}
+		return false;
+	}
 
+	return true;
+}

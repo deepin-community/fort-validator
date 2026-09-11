@@ -5,7 +5,7 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "Countersignature.h"
+#include "asn1/asn1c/Countersignature.h"
 
 /*
  * This type is implemented using SignerInfo,
@@ -24,9 +24,8 @@ asn_TYPE_descriptor_t asn_DEF_Countersignature = {
 	asn_DEF_Countersignature_tags_1,	/* Same as above */
 	sizeof(asn_DEF_Countersignature_tags_1)
 		/sizeof(asn_DEF_Countersignature_tags_1[0]), /* 1 */
-	{ 0, 0, SEQUENCE_constraint },
+	{ NULL, NULL, SEQUENCE_constraint },
 	asn_MBR_SignerInfo_1,
 	7,	/* Elements count */
 	&asn_SPC_SignerInfo_specs_1	/* Additional specs */
 };
-

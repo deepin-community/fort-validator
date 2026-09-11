@@ -5,7 +5,7 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "AttributeValue.h"
+#include "asn1/asn1c/AttributeValue.h"
 
 /*
  * This type is implemented using ANY,
@@ -15,12 +15,11 @@ asn_TYPE_descriptor_t asn_DEF_AttributeValue = {
 	"AttributeValue",
 	"AttributeValue",
 	&asn_OP_ANY,
-	0,	/* No effective tags (pointer) */
+	NULL,	/* No effective tags (pointer) */
 	0,	/* No effective tags (count) */
-	0,	/* No tags (pointer) */
+	NULL,	/* No tags (pointer) */
 	0,	/* No tags (count) */
-	{ 0, 0, ANY_constraint },
-	0, 0,	/* No members */
+	{ NULL, NULL, ANY_constraint },
+	NULL, 0,	/* No members */
 	&asn_SPC_ANY_specs	/* Additional specs */
 };
-

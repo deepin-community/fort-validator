@@ -2,8 +2,9 @@
  * Copyright (c) 2003, 2004 Lev Walkin <vlm@lionet.info>. All rights reserved.
  * Redistribution and modifications are permitted subject to BSD license.
  */
-#include "asn1/asn1c/asn_internal.h"
+
 #include "asn1/asn1c/ber_tlv_tag.h"
+
 #include <errno.h>
 
 ssize_t
@@ -74,7 +75,7 @@ ber_tlv_tag_fwrite(ber_tlv_tag_t tag, FILE *f) {
 
 ssize_t
 ber_tlv_tag_snprint(ber_tlv_tag_t tag, char *buf, size_t size) {
-	const char *type = 0;
+	const char *type = NULL;
 	int ret;
 
 	switch(tag & 0x3) {
@@ -141,4 +142,3 @@ ber_tlv_tag_serialize(ber_tlv_tag_t tag, void *bufp, size_t size) {
 
 	return required_size + 1;
 }
-

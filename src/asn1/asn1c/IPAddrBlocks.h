@@ -8,19 +8,7 @@
 #ifndef	_IPAddrBlocks_H_
 #define	_IPAddrBlocks_H_
 
-
-#include "asn1/asn1c/asn_application.h"
-
-/* Including external dependencies */
-#include "asn1/asn1c/asn_SEQUENCE_OF.h"
-#include "asn1/asn1c/constr_SEQUENCE_OF.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Forward declarations */
-struct IPAddressFamily;
+#include "asn1/asn1c/IPAddressFamily.h"
 
 /* IPAddrBlocks */
 typedef struct IPAddrBlocks {
@@ -33,12 +21,4 @@ typedef struct IPAddrBlocks {
 /* Implementation */
 extern asn_TYPE_descriptor_t asn_DEF_IPAddrBlocks;
 
-#ifdef __cplusplus
-}
-#endif
-
-/* Referred external types */
-#include "IPAddressFamily.h"
-
 #endif	/* _IPAddrBlocks_H_ */
-#include "asn1/asn1c/asn_internal.h"

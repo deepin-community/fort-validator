@@ -1,8 +1,9 @@
 #include "algorithm.h"
 
-#include <stdbool.h>
+#include <openssl/asn1.h>
 #include <openssl/obj_mac.h>
 #include <openssl/objects.h>
+#include <string.h>
 
 #include "log.h"
 
@@ -37,14 +38,17 @@ validate_certificate_signature_algorithm(int nid, char const *what)
 int
 validate_certificate_public_key_algorithm(X509_ALGOR *pa)
 {
+	ASN1_OBJECT const *algorithm;
 	int nid;
+
+	X509_ALGOR_get0(&algorithm, NULL, NULL, pa);
 
 	/*
 	 * RFC says sha256WithRSAEncryption, but current IETF concensus (and
 	 * practice) say that the right one is rsaEncryption.
 	 * https://mailarchive.ietf.org/arch/browse/sidr/
 	 */
-	nid = OBJ_obj2nid(pa->algorithm);
+	nid = OBJ_obj2nid(algorithm);
 	if (nid == NID_rsaEncryption)
 		return 0;
 
@@ -58,22 +62,27 @@ validate_certificate_public_key_algorithm(X509_ALGOR *pa)
 int
 validate_certificate_public_key_algorithm_bgpsec(X509_ALGOR *pa)
 {
+	const ASN1_OBJECT *obj;
+	int parameter_type;
+	const void *parameter = NULL;
 	int nid;
 
-	nid = OBJ_obj2nid(pa->algorithm);
+	X509_ALGOR_get0(&obj, &parameter_type, &parameter, pa);
+
+	nid = OBJ_obj2nid(obj);
 
 	/* Validate algorithm and parameters (RFC 8608#section-3.1.1) */
 	if (nid != NID_X9_62_id_ecPublicKey)
 		return pr_val_err("Certificate's public key format is NID '%s', not id-ecPublicKey.",
 		    OBJ_nid2sn(nid));
 
-	if (pa->parameter == NULL)
+	if (parameter == NULL)
 		return pr_val_err("Certificate's public key algorithm MUST have parameters");
 
-	if (pa->parameter->type != V_ASN1_OBJECT)
+	if (parameter_type != V_ASN1_OBJECT)
 		return pr_val_err("Certificate's public key parameter type isn't valid");
 
-	nid = OBJ_obj2nid((ASN1_OBJECT *)pa->parameter->value.object);
+	nid = OBJ_obj2nid(parameter);
 	if (nid != NID_X9_62_prime256v1)
 		return pr_val_err("Certificate's public key format is NID '%s', not secp256r1 (a.k.a prime256v1).",
 		    OBJ_nid2sn(nid));

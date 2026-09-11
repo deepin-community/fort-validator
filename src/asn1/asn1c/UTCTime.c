@@ -2,16 +2,17 @@
  * Copyright (c) 2003, 2004 Lev Walkin <vlm@lionet.info>. All rights reserved.
  * Redistribution and modifications are permitted subject to BSD license.
  */
-#include "asn1/asn1c/asn_internal.h"
-#include "asn1/asn1c/UTCTime.h"
-#include "asn1/asn1c/GeneralizedTime.h"
-#include <errno.h>
 
-#ifdef	__CYGWIN__
-#include "/usr/include/time.h"
-#else
-#include <time.h>
-#endif	/* __CYGWIN__ */
+#include "asn1/asn1c/UTCTime.h"
+
+#include <assert.h>
+#include <errno.h>
+#include <string.h>
+
+#include "asn1/asn1c/GeneralizedTime.h"
+#include "asn1/asn1c/asn_internal.h"
+#include "asn1/asn1c/xer_encoder.h"
+#include "json_util.h"
 
 #ifndef	ASN___INTERNAL_TEST_MODE
 
@@ -23,35 +24,15 @@ static const ber_tlv_tag_t asn_DEF_UTCTime_tags[] = {
 	(ASN_TAG_CLASS_UNIVERSAL | (26 << 2)),  /* [UNIVERSAL 26] IMPLICIT ...*/
 	(ASN_TAG_CLASS_UNIVERSAL | (4 << 2))    /* ... OCTET STRING */
 };
-static asn_per_constraints_t asn_DEF_UTCTime_constraints = {
-        { APC_CONSTRAINED, 7, 7, 0x20, 0x7e },  /* Value */
-        { APC_SEMI_CONSTRAINED, -1, -1, 0, 0 }, /* Size */
-        0, 0
-};
 asn_TYPE_operation_t asn_OP_UTCTime = {
 	OCTET_STRING_free,
 	UTCTime_print,
 	UTCTime_compare,
 	OCTET_STRING_decode_ber,    /* Implemented in terms of OCTET STRING */
 	OCTET_STRING_encode_der,    /* Implemented in terms of OCTET STRING */
-	OCTET_STRING_decode_xer_utf8,
+	UTCTime_encode_json,
 	UTCTime_encode_xer,
-#ifdef	ASN_DISABLE_OER_SUPPORT
-	0,
-	0,
-#else
-	OCTET_STRING_decode_oer,
-	OCTET_STRING_encode_oer,
-#endif  /* ASN_DISABLE_OER_SUPPORT */
-#ifdef	ASN_DISABLE_PER_SUPPORT
-	0,
-	0,
-#else
-	OCTET_STRING_decode_uper,
-	OCTET_STRING_encode_uper,
-#endif	/* ASN_DISABLE_PER_SUPPORT */
-	UTCTime_random_fill,
-	0	/* Use generic outmost tag fetcher */
+	NULL	/* Use generic outmost tag fetcher */
 };
 asn_TYPE_descriptor_t asn_DEF_UTCTime = {
 	"UTCTime",
@@ -63,9 +44,9 @@ asn_TYPE_descriptor_t asn_DEF_UTCTime = {
 	asn_DEF_UTCTime_tags,
 	sizeof(asn_DEF_UTCTime_tags)
 	  / sizeof(asn_DEF_UTCTime_tags[0]),
-	{ 0, &asn_DEF_UTCTime_constraints, UTCTime_constraint },
-	0, 0,	/* No members */
-	0	/* No specifics */
+	{ NULL, NULL, UTCTime_constraint },
+	NULL, 0,	/* No members */
+	NULL	/* No specifics */
 };
 
 #endif	/* ASN___INTERNAL_TEST_MODE */
@@ -77,11 +58,12 @@ int
 UTCTime_constraint(const asn_TYPE_descriptor_t *td, const void *sptr,
                    asn_app_constraint_failed_f *ctfailcb, void *app_key) {
     const UTCTime_t *st = (const UTCTime_t *)sptr;
-	time_t tloc;
 
-	errno = EPERM;			/* Just an unlikely error code */
-	tloc = asn_UT2time(st, 0, 0);
-	if(tloc == -1 && errno != EPERM) {
+    /* asn_UT2time() no longer supports NULL tm and no GMT. */
+    fprintf(stderr, "UTCTime_constraint() is not implemented for now.\n");
+    abort();
+
+	if(asn_UT2time(st, NULL) != 0) {
         ASN__CTFAIL(app_key, td, sptr, "%s: Invalid time format: %s (%s:%d)",
                     td->name, strerror(errno), __FILE__, __LINE__);
         return -1;
@@ -94,20 +76,18 @@ UTCTime_constraint(const asn_TYPE_descriptor_t *td, const void *sptr,
 
 asn_enc_rval_t
 UTCTime_encode_xer(const asn_TYPE_descriptor_t *td, const void *sptr,
-                   int ilevel, enum xer_encoder_flags_e flags,
+                   int ilevel, int flags,
                    asn_app_consume_bytes_f *cb, void *app_key) {
     if(flags & XER_F_CANONICAL) {
 		asn_enc_rval_t rv;
 		UTCTime_t *ut;
 		struct tm tm;
 
-		errno = EPERM;
-		if(asn_UT2time((const UTCTime_t *)sptr, &tm, 1) == -1
-				&& errno != EPERM)
+		if(asn_UT2time((const UTCTime_t *)sptr, &tm) != 0)
 			ASN__ENCODE_FAILED;
 
 		/* Fractions are not allowed in UTCTime */
-		ut = asn_time2UT(0, &tm, 1);
+		ut = asn_time2UT(NULL, &tm);
 		if(!ut) ASN__ENCODE_FAILED;
 
 		rv = OCTET_STRING_encode_xer_utf8(td, sptr, ilevel, flags,
@@ -122,36 +102,52 @@ UTCTime_encode_xer(const asn_TYPE_descriptor_t *td, const void *sptr,
 
 #endif	/* ASN___INTERNAL_TEST_MODE */
 
+static int
+UTCTime2str(const UTCTime_t *st, char *str)
+{
+	struct tm tm;
+
+	if (asn_UT2time(st, &tm) != 0)
+		return -1;
+
+	return asn_tm2str(&tm, str);
+}
+
 int
 UTCTime_print(const asn_TYPE_descriptor_t *td, const void *sptr, int ilevel,
-              asn_app_consume_bytes_f *cb, void *app_key) {
-    const UTCTime_t *st = (const UTCTime_t *)sptr;
+    asn_app_consume_bytes_f *cb, void *app_key)
+{
+	const UTCTime_t *st = (const UTCTime_t *)sptr;
+	char buf[ASN_TM_STR_MAXLEN];
+	int ret;
 
-	(void)td;	/* Unused argument */
-	(void)ilevel;	/* Unused argument */
-
-	if(st && st->buf) {
-		char buf[32];
-		struct tm tm;
-		int ret;
-
-		errno = EPERM;
-		if(asn_UT2time(st, &tm, 1) == -1 && errno != EPERM)
-			return (cb("<bad-value>", 11, app_key) < 0) ? -1 : 0;
-
-		ret = snprintf(buf, sizeof(buf),
-			"%04d-%02d-%02d %02d:%02d:%02d (GMT)",
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-			tm.tm_hour, tm.tm_min, tm.tm_sec);
-		assert(ret > 0 && ret < (int)sizeof(buf));
-		return (cb(buf, ret, app_key) < 0) ? -1 : 0;
-	} else {
+	if (st == NULL || st->buf == NULL)
 		return (cb("<absent>", 8, app_key) < 0) ? -1 : 0;
-	}
+
+	ret = UTCTime2str(st, buf);
+	if (ret < 0)
+		return (cb("<bad-value>", 11, app_key) < 0) ? -1 : 0;
+
+	return (cb(buf, ret, app_key) < 0) ? -1 : 0;
+}
+
+json_t *
+UTCTime_encode_json(const asn_TYPE_descriptor_t *td, const void *sptr)
+{
+	const UTCTime_t *st = (const UTCTime_t *)sptr;
+	char buf[ASN_TM_STR_MAXLEN];
+
+	if (st == NULL || st->buf == NULL)
+		return json_null();
+
+	if (UTCTime2str(st, buf) < 0)
+		return NULL;
+
+	return json_str_new(buf);
 }
 
 time_t
-asn_UT2time(const UTCTime_t *st, struct tm *_tm, int as_gmt) {
+asn_UT2time(const UTCTime_t *st, struct tm *_tm) {
 	char buf[24];	/* "AAMMJJhhmmss+hhmm" + cushion */
 	GeneralizedTime_t gt;
 
@@ -174,54 +170,21 @@ asn_UT2time(const UTCTime_t *st, struct tm *_tm, int as_gmt) {
 		gt.buf[1] = 0x30;
 	}
 
-	return asn_GT2time(&gt, _tm, as_gmt);
+	return asn_GT2time(&gt, _tm);
 }
 
 UTCTime_t *
-asn_time2UT(UTCTime_t *opt_ut, const struct tm *tm, int force_gmt) {
+asn_time2UT(UTCTime_t *opt_ut, const struct tm *tm) {
 	GeneralizedTime_t *gt = (GeneralizedTime_t *)opt_ut;
 
-	gt = asn_time2GT(gt, tm, force_gmt);
-	if(gt == 0) return 0;
+	gt = asn_time2GT(gt, tm);
+	if(gt == NULL) return NULL;
 
 	assert(gt->size >= 2);
 	gt->size -= 2;
 	memmove(gt->buf, gt->buf + 2, gt->size + 1);
 
 	return (UTCTime_t *)gt;
-}
-
-
-asn_random_fill_result_t
-UTCTime_random_fill(const asn_TYPE_descriptor_t *td, void **sptr,
-                    const asn_encoding_constraints_t *constraints,
-                    size_t max_length) {
-    asn_random_fill_result_t result_ok = {ARFILL_OK, 1};
-    asn_random_fill_result_t result_failed = {ARFILL_FAILED, 0};
-    asn_random_fill_result_t result_skipped = {ARFILL_SKIPPED, 0};
-    static const char *values[] = {
-        "700101000000",  "700101000000-0000", "700101000000+0000",
-        "700101000000Z", "821106210623",      "691106210827-0500",
-        "821106210629Z",
-    };
-    size_t rnd = asn_random_between(0, sizeof(values)/sizeof(values[0])-1);
-
-    (void)constraints;
-
-    if(max_length < sizeof("yymmddhhmmss") && !*sptr) {
-        return result_skipped;
-    }
-
-    if(*sptr) {
-        if(OCTET_STRING_fromBuf(*sptr, values[rnd], -1) != 0) {
-            if(!sptr) return result_failed;
-        }
-    } else {
-        *sptr = OCTET_STRING_new_fromBuf(td, values[rnd], -1);
-        if(!sptr) return result_failed;
-    }
-
-    return result_ok;
 }
 
 int
@@ -232,15 +195,19 @@ UTCTime_compare(const asn_TYPE_descriptor_t *td, const void *aptr,
 
     (void)td;
 
+    /* asn_UT2time() no longer supports NULL tm and no GMT. */
+    fprintf(stderr, "UTCTime_compare() is not implemented for now.\n");
+    abort();
+
     if(a && b) {
         time_t at, bt;
         int aerr, berr;
 
         errno = EPERM;
-        at = asn_UT2time(a, 0, 0);
+        at = asn_UT2time(a, NULL);
         aerr = errno;
         errno = EPERM;
-        bt = asn_UT2time(b, 0, 0);
+        bt = asn_UT2time(b, NULL);
         berr = errno;
 
         if(at == -1 && aerr != EPERM) {
@@ -270,4 +237,3 @@ UTCTime_compare(const asn_TYPE_descriptor_t *td, const void *aptr,
         return 1;
     }
 }
-

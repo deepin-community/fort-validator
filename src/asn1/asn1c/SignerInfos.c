@@ -5,16 +5,16 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "SignerInfos.h"
+#include "asn1/asn1c/SignerInfos.h"
 
 asn_TYPE_member_t asn_MBR_SignerInfos_1[] = {
 	{ ATF_POINTER, 0, 0,
 		(ASN_TAG_CLASS_UNIVERSAL | (16 << 2)),
 		0,
 		&asn_DEF_SignerInfo,
-		0,
-		{ 0, 0, 0 },
-		0, 0, /* No default value */
+		NULL,
+		{ NULL, NULL, NULL },
+		NULL, NULL, /* No default value */
 		""
 		},
 };
@@ -36,9 +36,8 @@ asn_TYPE_descriptor_t asn_DEF_SignerInfos = {
 	asn_DEF_SignerInfos_tags_1,	/* Same as above */
 	sizeof(asn_DEF_SignerInfos_tags_1)
 		/sizeof(asn_DEF_SignerInfos_tags_1[0]), /* 1 */
-	{ 0, 0, SET_OF_constraint },
+	{ NULL, NULL, SET_OF_constraint },
 	asn_MBR_SignerInfos_1,
 	1,	/* Single element */
 	&asn_SPC_SignerInfos_specs_1	/* Additional specs */
 };
-

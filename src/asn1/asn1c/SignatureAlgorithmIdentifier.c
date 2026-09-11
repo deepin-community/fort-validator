@@ -5,7 +5,7 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "SignatureAlgorithmIdentifier.h"
+#include "asn1/asn1c/SignatureAlgorithmIdentifier.h"
 
 /*
  * This type is implemented using AlgorithmIdentifier,
@@ -24,9 +24,8 @@ asn_TYPE_descriptor_t asn_DEF_SignatureAlgorithmIdentifier = {
 	asn_DEF_SignatureAlgorithmIdentifier_tags_1,	/* Same as above */
 	sizeof(asn_DEF_SignatureAlgorithmIdentifier_tags_1)
 		/sizeof(asn_DEF_SignatureAlgorithmIdentifier_tags_1[0]), /* 1 */
-	{ 0, 0, SEQUENCE_constraint },
+	{ NULL, NULL, SEQUENCE_constraint },
 	asn_MBR_AlgorithmIdentifier_1,
 	2,	/* Elements count */
 	&asn_SPC_AlgorithmIdentifier_specs_1	/* Additional specs */
 };
-

@@ -5,7 +5,7 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "BinarySigningTime.h"
+#include "asn1/asn1c/BinarySigningTime.h"
 
 int
 BinarySigningTime_constraint(const asn_TYPE_descriptor_t *td, const void *sptr,
@@ -38,9 +38,6 @@ BinarySigningTime_constraint(const asn_TYPE_descriptor_t *td, const void *sptr,
  * This type is implemented using BinaryTime,
  * so here we adjust the DEF accordingly.
  */
-static asn_oer_constraints_t asn_OER_type_BinarySigningTime_constr_1 CC_NOTUSED = {
-	{ 0, 1 }	/* (0..MAX) */,
-	-1};
 static const ber_tlv_tag_t asn_DEF_BinarySigningTime_tags_1[] = {
 	(ASN_TAG_CLASS_UNIVERSAL | (2 << 2))
 };
@@ -54,8 +51,7 @@ asn_TYPE_descriptor_t asn_DEF_BinarySigningTime = {
 	asn_DEF_BinarySigningTime_tags_1,	/* Same as above */
 	sizeof(asn_DEF_BinarySigningTime_tags_1)
 		/sizeof(asn_DEF_BinarySigningTime_tags_1[0]), /* 1 */
-	{ &asn_OER_type_BinarySigningTime_constr_1, 0, BinarySigningTime_constraint },
-	0, 0,	/* No members */
-	0	/* No specifics */
+	{ NULL, NULL, BinarySigningTime_constraint },
+	NULL, 0,	/* No members */
+	NULL	/* No specifics */
 };
-

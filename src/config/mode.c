@@ -1,14 +1,14 @@
 #include "config/mode.h"
 
 #include <getopt.h>
-#include <stdlib.h>
 #include <string.h>
 
-#include "log.h"
 #include "config/str.h"
+#include "log.h"
 
 #define VALUE_SERVER		"server"
 #define VALUE_STANDALONE	"standalone"
+#define VALUE_PRINT_FILE	"print"
 
 #define DEREFERENCE(void_value) (*((enum mode *) void_value))
 
@@ -24,6 +24,9 @@ print_mode(struct option_field const *field, void *value)
 	case STANDALONE:
 		str = VALUE_STANDALONE;
 		break;
+	case PRINT_FILE:
+		str = VALUE_PRINT_FILE;
+		break;
 	}
 
 	pr_op_info("%s: %s", field->name, str);
@@ -37,6 +40,8 @@ parse_argv_mode(struct option_field const *field, char const *str,
 		DEREFERENCE(result) = SERVER;
 	else if (strcmp(str, VALUE_STANDALONE) == 0)
 		DEREFERENCE(result) = STANDALONE;
+	else if (strcmp(str, VALUE_PRINT_FILE) == 0)
+		DEREFERENCE(result) = PRINT_FILE;
 	else
 		return pr_op_err("Unknown mode: '%s'", str);
 
@@ -60,5 +65,5 @@ const struct global_type gt_mode = {
 	.print = print_mode,
 	.parse.argv = parse_argv_mode,
 	.parse.json = parse_json_mode,
-	.arg_doc = VALUE_SERVER "|" VALUE_STANDALONE,
+	.arg_doc = VALUE_SERVER "|" VALUE_STANDALONE "|" VALUE_PRINT_FILE,
 };

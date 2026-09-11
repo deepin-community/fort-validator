@@ -1,3 +1,66 @@
+fort-validator (1.6.8-0+deb13u1) trixie-security; urgency=medium
+
+  * Rebuild for trixie-security.
+    + Fixes CVE-2026-53499.
+
+ -- Marco d'Itri <md@linux.it>  Tue, 08 Sep 2026 01:28:39 +0200
+
+fort-validator (1.6.8-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Marco d'Itri <md@linux.it>  Mon, 01 Jun 2026 20:44:17 +0200
+
+fort-validator (1.6.7-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Marco d'Itri <md@linux.it>  Sun, 21 Sep 2025 20:33:40 +0200
+
+fort-validator (1.6.6-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Marco d'Itri <md@linux.it>  Thu, 13 Feb 2025 23:23:37 +0100
+
+fort-validator (1.6.5-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Marco d'Itri <md@linux.it>  Sun, 22 Dec 2024 00:31:01 +0100
+
+fort-validator (1.6.4+20240930-1) unstable; urgency=medium
+
+  * New upstream snapshot.
+
+ -- Marco d'Itri <md@linux.it>  Mon, 30 Sep 2024 23:40:35 +0200
+
+fort-validator (1.6.4-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Marco d'Itri <md@linux.it>  Sun, 29 Sep 2024 12:25:12 +0200
+
+fort-validator (1.6.3-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Create /var/lib/fort-validator/CACHEDIR.TAG.
+
+ -- Marco d'Itri <md@linux.it>  Fri, 23 Aug 2024 00:15:14 +0200
+
+fort-validator (1.6.2-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Backport a fix for build failures with GCC 14. (Closes: #1074962)
+
+ -- Marco d'Itri <md@linux.it>  Sat, 27 Jul 2024 18:35:15 +0200
+
+fort-validator (1.6.1-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Marco d'Itri <md@linux.it>  Sat, 16 Dec 2023 06:01:03 +0100
+
 fort-validator (1.5.4-1) unstable; urgency=medium
 
   * New upstream release.

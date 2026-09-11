@@ -1,29 +1,26 @@
 #include "config.h"
 
-#include <limits.h>
-#include <stdlib.h>
-#include <string.h>
 #include <errno.h>
 #include <getopt.h>
-#include <sys/socket.h>
+#include <libxml/xmlreader.h>
+#include <microhttpd.h>
+#include <openssl/opensslv.h>
 #include <syslog.h>
 
 #include "common.h"
+#include "config/boolean.h"
+#include "config/curl_offset.h"
+#include "config/incidences.h"
+#include "config/str.h"
+#include "config/uint.h"
+#include "config/work_offline.h"
 #include "configure_ac.h"
 #include "daemon.h"
-#include "file.h"
 #include "init.h"
 #include "json_handler.h"
 #include "log.h"
-#include "config/boolean.h"
-#include "config/incidences.h"
-#include "config/init_tals.h"
-#include "config/rrdp_conf.h"
-#include "config/str.h"
-#include "config/sync_strategy.h"
-#include "config/uint.h"
-#include "config/uint32.h"
-#include "config/work_offline.h"
+#include "state.h"
+#include "thread/thread_pool.h"
 
 /**
  * To add a member to this structure,
@@ -40,13 +37,7 @@ struct rpki_config {
 	char *tal;
 	/** Path of our local clone of the repository */
 	char *local_repository;
-	/** TODO (later) Deprecated, remove it. RSYNC download strategy. */
-	enum rsync_strategy sync_strategy;
-	/**
-	 * Handle TAL URIs in random order?
-	 * (https://tools.ietf.org/html/rfc8630#section-3, last
-	 * paragraphs)
-	 */
+	/* Deprecated; does nothing. */
 	bool shuffle_tal_uris;
 	/**
 	 * rfc6487#section-7.2, last paragraph.
@@ -55,7 +46,7 @@ struct rpki_config {
 	unsigned int maximum_certificate_depth;
 	/** File or directory where the .slurm file(s) is(are) located */
 	char *slurm;
-	/* Run as RTR server or standalone validation */
+	/* */
 	enum mode mode;
 	/*
 	 * Disable outgoing requests (currently rsync and http supported), if
@@ -86,15 +77,16 @@ struct rpki_config {
 	} server;
 
 	struct {
+		unsigned int port;
+	} prometheus;
+
+	struct {
 		/* Enables the protocol */
 		bool enabled;
-		/*
-		 * Priority, this will override the order set at the CAs in
-		 * their accessMethod extension.
-		 */
+		/* Protocol preference; compared to http.priority */
 		unsigned int priority;
-		/* Synchronization download strategy. */
-		enum rsync_strategy strategy;
+		/* Deprecated; does nothing. */
+		char *strategy;
 		/* Retry conf, utilized on errors */
 		struct {
 			/* Maximum number of retries on error */
@@ -102,9 +94,10 @@ struct rpki_config {
 			/* Interval (in seconds) between each retry */
 			unsigned int interval;
 		} retry;
+		unsigned int transfer_timeout;
 		char *program;
 		struct {
-			struct string_array flat;
+			struct string_array flat; /* Deprecated */
 			struct string_array recursive;
 		} args;
 	} rsync;
@@ -112,10 +105,7 @@ struct rpki_config {
 	struct {
 		/* Enables the protocol */
 		bool enabled;
-		/*
-		 * Priority, this will override the order set at the CAs in
-		 * their accessMethod extension.
-		 */
+		/* Protocol preference; compared to rsync.priority */
 		unsigned int priority;
 		/* Retry conf, utilized on errors */
 		struct {
@@ -124,27 +114,10 @@ struct rpki_config {
 			/* Interval (in seconds) between each retry */
 			unsigned int interval;
 		} retry;
-	} rrdp;
-
-	struct {
-		/* Enables the protocol */
-		bool enabled;
-		/*
-		 * Priority, whenever there's an option to sync something via
-		 * http or rsync, use this priority. When working with CAs, this
-		 * will override the order set at the CAs in their accessMethod
-		 * extension.
-		 */
-		unsigned int priority;
-		/* Retry conf, utilized on errors */
-		struct {
-			/* Maximum number of retries on error */
-			unsigned int count;
-			/* Interval (in seconds) between each retry */
-			unsigned int interval;
-		} retry;
-		/* User-Agent header set at requests */
+		/* HTTP User-Agent request header */
 		char *user_agent;
+		/* Allowed redirects per request */
+		unsigned int max_redirs;
 		/* CURLOPT_CONNECTTIMEOUT for our HTTP transfers. */
 		unsigned int connect_timeout;
 		/* CURLOPT_TIMEOUT for our HTTP transfers. */
@@ -153,13 +126,12 @@ struct rpki_config {
 		unsigned int low_speed_limit;
 		/* CURLOPT_LOW_SPEED_TIME for our HTTP transfers. */
 		unsigned int low_speed_time;
-		/*
-		 * CURLOPT_MAXFILESIZE, except it also works for unknown size
-		 * files. (Though this is reactive, not preventive.)
-		 */
-		unsigned int max_file_size;
+		/* CURLOPT_MAXFILESIZE_LARGE for our HTTP transfers. */
+		curl_off_t max_file_size;
 		/* Directory where CA certs to verify peers are found */
 		char *ca_path;
+		/* See CURLOPT_PROXY */
+		char *proxy;
 	} http;
 
 	struct {
@@ -208,16 +180,13 @@ struct rpki_config {
 	/* ASN1 decoder max stack size allowed */
 	unsigned int asn1_decode_max_stack;
 
-	/* Time period that must lapse to warn about a stale repository */
+	/* Deprecated; does nothing. */
 	unsigned int stale_repository_period;
 
 	/* Download the normal TALs into --tal? */
 	bool init_tals;
 	/* Download AS0 TALs into --tal? */
 	bool init_tal0s;
-
-	/* Deprecated; currently does nothing. */
-	unsigned int init_tal_locations;
 
 	/* Thread pools for specific tasks */
 	struct {
@@ -227,9 +196,12 @@ struct rpki_config {
 		} server;
 		/* Threads related to validation cycles */
 		struct {
-			unsigned int max;
+			unsigned int max; /* Deprecated */
 		} validation;
 	} thread_pool;
+
+	enum file_type ft;
+	char *payload;
 };
 
 static void print_usage(FILE *, bool);
@@ -297,6 +269,7 @@ static const struct option_field options[] = {
 		.offset = offsetof(struct rpki_config, tal),
 		.doc = "Path to the TAL file or TALs directory",
 		.arg_doc = "<file>|<directory>",
+		.json_null_allowed = false,
 	}, {
 		.id = 'r',
 		.name = "local-repository",
@@ -304,18 +277,14 @@ static const struct option_field options[] = {
 		.offset = offsetof(struct rpki_config, local_repository),
 		.doc = "Directory where the repository local cache will be stored/read",
 		.arg_doc = "<directory>",
-	}, {
-		.id = 1001,
-		.name = "sync-strategy",
-		.type = &gt_sync_strategy,
-		.offset = offsetof(struct rpki_config, sync_strategy),
-		.doc = "RSYNC download strategy. Deprecated; use 'rsync.strategy' instead.",
+		.json_null_allowed = false,
 	}, {
 		.id = 2001,
 		.name = "shuffle-uris",
 		.type = &gt_bool,
 		.offset = offsetof(struct rpki_config, shuffle_tal_uris),
-		.doc = "Shuffle URIs in the TAL before accessing them",
+		.doc = "Deprecated; does nothing.",
+		.deprecated = true,
 	}, {
 		.id = 1002,
 		.name = "maximum-certificate-depth",
@@ -335,7 +304,8 @@ static const struct option_field options[] = {
 		.type = &gt_string,
 		.offset = offsetof(struct rpki_config, slurm),
 		.doc = "Path to the SLURM file or SLURMs directory (files must have the extension .slurm)",
-		.arg_doc = "<file>|<directory>"
+		.arg_doc = "<file>|<directory>",
+		.json_null_allowed = true,
 	}, {
 		.id = 1004,
 		.name = "mode",
@@ -368,9 +338,10 @@ static const struct option_field options[] = {
 	}, {
 		.id = 5001,
 		.name = "server.port",
-		.type = &gt_string,
+		.type = &gt_service,
 		.offset = offsetof(struct rpki_config, server.port),
 		.doc = "Default port to which RTR server addresses will bind itself to. Can be a string, in which case a number will be resolved. If all of the addresses have a port, this value isn't utilized.",
+		.json_null_allowed = false,
 	}, {
 		.id = 5002,
 		.name = "server.backlog",
@@ -456,6 +427,19 @@ static const struct option_field options[] = {
 		.max = UINT_MAX,
 	},
 
+	/* Prometheus fields */
+	{
+		.id = 14000,
+		.name = "prometheus.port",
+		.type = &gt_uint,
+		.offset = offsetof(struct rpki_config, prometheus.port),
+		.doc = "Port to bind the Prometheus server to. "
+		    "Prometheus requires this value and 'server' mode to start. "
+		    "Unlike server.port, prometheus.port will not be resolved.",
+		.min = 0,
+		.max = 0xFFFF,
+	},
+
 	/* RSYNC fields */
 	{
 		.id = 3000,
@@ -466,17 +450,19 @@ static const struct option_field options[] = {
 	}, {
 		.id = 3001,
 		.name = "rsync.priority",
-		.type = &gt_uint32,
+		.type = &gt_uint,
 		.offset = offsetof(struct rpki_config, rsync.priority),
-		.doc = "Priority of execution to fetch repositories files, a higher value means higher priority",
+		.doc = "rsync's priority for repository file fetching. Higher value means higher priority.",
 		.min = 0,
 		.max = 100,
 	}, {
 		.id = 3002,
 		.name = "rsync.strategy",
-		.type = &gt_rsync_strategy,
+		.type = &gt_string,
 		.offset = offsetof(struct rpki_config, rsync.strategy),
-		.doc = "RSYNC download strategy",
+		.doc = "Deprecated; does nothing.",
+		.json_null_allowed = true,
+		.deprecated = true,
 	}, {
 		.id = 3003,
 		.name = "rsync.retry.count",
@@ -501,12 +487,13 @@ static const struct option_field options[] = {
 		.doc = "Name of the program needed to execute an RSYNC",
 		.arg_doc = "<path to program>",
 		.availability = AVAILABILITY_JSON,
+		.json_null_allowed = false,
 	}, {
 		.id = 3006,
 		.name = "rsync.arguments-recursive",
 		.type = &gt_string_array,
 		.offset = offsetof(struct rpki_config, rsync.args.recursive),
-		.doc = "RSYNC program arguments that will trigger a recursive RSYNC",
+		.doc = "RSYNC program arguments",
 		.availability = AVAILABILITY_JSON,
 		/* Unlimited */
 		.max = 0,
@@ -515,41 +502,17 @@ static const struct option_field options[] = {
 		.name = "rsync.arguments-flat",
 		.type = &gt_string_array,
 		.offset = offsetof(struct rpki_config, rsync.args.flat),
-		.doc = "RSYNC program arguments that will trigger a non-recursive RSYNC",
+		.doc = "Deprecated; does nothing.",
 		.availability = AVAILABILITY_JSON,
 		/* Unlimited */
 		.max = 0,
-	},
-
-	/* RRDP fields */
-	{
-		.id = 10000,
-		.name = "rrdp.enabled",
-		.type = &gt_rrdp_enabled,
-		.offset = offsetof(struct rpki_config, rrdp.enabled),
-		.doc = "Enables RRDP execution. Deprecated; use 'http.enabled' instead.",
+		.deprecated = true,
 	}, {
-		.id = 10001,
-		.name = "rrdp.priority",
-		.type = &gt_rrdp_priority,
-		.offset = offsetof(struct rpki_config, rrdp.priority),
-		.doc = "Priority of execution to fetch repositories files, a higher value means higher priority. Deprecated; use 'http.priority' instead.",
-		.min = 0,
-		.max = 100,
-	}, {
-		.id = 10002,
-		.name = "rrdp.retry.count",
-		.type = &gt_rrdp_retry_count,
-		.offset = offsetof(struct rpki_config, rrdp.retry.count),
-		.doc = "Maximum amount of retries whenever there's an error fetching RRDP files. Deprecated; use 'http.retry.count' instead.",
-		.min = 0,
-		.max = UINT_MAX,
-	}, {
-		.id = 10003,
-		.name = "rrdp.retry.interval",
-		.type = &gt_rrdp_retry_interval,
-		.offset = offsetof(struct rpki_config, rrdp.retry.interval),
-		.doc = "Period (in seconds) to wait between retries after an error ocurred fetching RRDP files. Deprecated; use 'http.retry.interval' instead.",
+		.id = 3008,
+		.name = "rsync.transfer-timeout",
+		.type = &gt_uint,
+		.offset = offsetof(struct rpki_config, rsync.transfer_timeout),
+		.doc = "Maximum transfer time before killing the rsync process",
 		.min = 0,
 		.max = UINT_MAX,
 	},
@@ -558,21 +521,21 @@ static const struct option_field options[] = {
 	{
 		.id = 9000,
 		.name = "http.enabled",
-		.type = &gt_rrdp_enabled,
+		.type = &gt_bool,
 		.offset = offsetof(struct rpki_config, http.enabled),
 		.doc = "Enables outgoing HTTP requests",
 	}, {
 		.id = 9001,
 		.name = "http.priority",
-		.type = &gt_rrdp_priority,
+		.type = &gt_uint,
 		.offset = offsetof(struct rpki_config, http.priority),
-		.doc = "Priority of execution to fetch repositories files, a higher value means higher priority",
+		.doc = "HTTP's priority for repository file fetching. Higher value means higher priority.",
 		.min = 0,
 		.max = 100,
 	}, {
 		.id = 9002,
 		.name = "http.retry.count",
-		.type = &gt_rrdp_retry_count,
+		.type = &gt_uint,
 		.offset = offsetof(struct rpki_config, http.retry.count),
 		.doc = "Maximum amount of retries whenever there's an error requesting HTTP URIs",
 		.min = 0,
@@ -580,7 +543,7 @@ static const struct option_field options[] = {
 	}, {
 		.id = 9003,
 		.name = "http.retry.interval",
-		.type = &gt_rrdp_retry_interval,
+		.type = &gt_uint,
 		.offset = offsetof(struct rpki_config, http.retry.interval),
 		.doc = "Period (in seconds) to wait between retries after an error ocurred doing HTTP requests",
 		.min = 0,
@@ -591,6 +554,15 @@ static const struct option_field options[] = {
 		.type = &gt_string,
 		.offset = offsetof(struct rpki_config, http.user_agent),
 		.doc = "User-Agent to use at HTTP requests, eg. Fort Validator Local/1.0",
+		.json_null_allowed = false,
+	}, {
+		.id = 9012,
+		.name = "http.max-redirs",
+		.type = &gt_uint,
+		.offset = offsetof(struct rpki_config, http.max_redirs),
+		.doc = "Maximum number of redirections to follow, per HTTP request.",
+		.min = 0,
+		.max = UINT_MAX,
 	}, {
 		.id = 9005,
 		.name = "http.connect-timeout",
@@ -605,14 +577,6 @@ static const struct option_field options[] = {
 		.type = &gt_uint,
 		.offset = offsetof(struct rpki_config, http.transfer_timeout),
 		.doc = "Maximum transfer time (once the connection is established) before dropping the connection",
-		.min = 0,
-		.max = UINT_MAX,
-	}, {
-		.id = 9007,
-		.name = "http.idle-timeout", /* TODO DEPRECATED. */
-		.type = &gt_uint,
-		.offset = offsetof(struct rpki_config, http.low_speed_time),
-		.doc = "Deprecated; currently an alias for --http.low-speed-time. Use --http.low-speed-time instead.",
 		.min = 0,
 		.max = UINT_MAX,
 	}, {
@@ -634,7 +598,7 @@ static const struct option_field options[] = {
 	}, {
 		.id = 9011,
 		.name = "http.max-file-size",
-		.type = &gt_uint,
+		.type = &gt_curl_offset,
 		.offset = offsetof(struct rpki_config, http.max_file_size),
 		.doc = "Fort will refuse to download files larger than this number of bytes.",
 		.min = 0,
@@ -646,6 +610,15 @@ static const struct option_field options[] = {
 		.offset = offsetof(struct rpki_config, http.ca_path),
 		.doc = "Directory where CA certificates are found, used to verify the peer",
 		.arg_doc = "<directory>",
+		.json_null_allowed = true,
+	}, {
+		.id = 9013,
+		.name = "http.proxy",
+		.type = &gt_string,
+		.offset = offsetof(struct rpki_config, http.proxy),
+		.doc = "Name of proxy to use",
+		.arg_doc = "<URI>",
+		.json_null_allowed = true,
 	},
 
 	/* Logging fields */
@@ -674,6 +647,7 @@ static const struct option_field options[] = {
 		.offset = offsetof(struct rpki_config, log.tag),
 		.doc = "Text tag to identify operation logs",
 		.arg_doc = "<string>",
+		.json_null_allowed = true,
 	}, {
 		.id = 4004,
 		.name = "log.facility",
@@ -719,6 +693,7 @@ static const struct option_field options[] = {
 		.offset = offsetof(struct rpki_config, validation_log.tag),
 		.doc = "Text tag to identify validation logs",
 		.arg_doc = "<string>",
+		.json_null_allowed = true,
 	}, {
 		.id = 4014,
 		.name = "validation-log.facility",
@@ -757,6 +732,7 @@ static const struct option_field options[] = {
 		.offset = offsetof(struct rpki_config, output.roa),
 		.doc = "File where ROAs will be stored, use '-' to print at console",
 		.arg_doc = "<file>",
+		.json_null_allowed = true,
 	}, {
 		.id = 6001,
 		.name = "output.bgpsec",
@@ -764,6 +740,7 @@ static const struct option_field options[] = {
 		.offset = offsetof(struct rpki_config, output.bgpsec),
 		.doc = "File where BGPsec Router Keys will be stored, use '-' to print at console",
 		.arg_doc = "<file>",
+		.json_null_allowed = true,
 	}, {
 		.id = 6002,
 		.name = "output.format",
@@ -785,7 +762,8 @@ static const struct option_field options[] = {
 		.name = "stale-repository-period",
 		.type = &gt_uint,
 		.offset = offsetof(struct rpki_config, stale_repository_period),
-		.doc = "Time period that must lapse to warn about stale repositories",
+		.doc = "Deprecated; does nothing.",
+		.deprecated = true,
 		.min = 0,
 		.max = UINT_MAX,
 	},
@@ -804,13 +782,6 @@ static const struct option_field options[] = {
 		.offset = offsetof(struct rpki_config, init_tal0s),
 		.doc = "Fetch the currently-known AS0 TAL files into --tal",
 		.availability = AVAILABILITY_GETOPT,
-	}, {
-		.id = 11001,
-		.name = "init-locations",
-		.type = &gt_init_tals_locations,
-		.offset = offsetof(struct rpki_config, init_tal_locations),
-		.doc = "Deprecated. Does nothing as of Fort 1.5.1.",
-		.availability = AVAILABILITY_JSON,
 	},
 
 	{
@@ -827,11 +798,19 @@ static const struct option_field options[] = {
 		.type = &gt_uint,
 		.offset = offsetof(struct rpki_config,
 		    thread_pool.validation.max),
-		.doc = "Number of threads in the validation thread pool. (Each thread handles one TAL tree.)",
+		.doc = "Deprecated; does nothing.",
+		.deprecated = true,
 		.min = 0,
 		.max = 100,
 	},
 
+	{
+		.id = 13000,
+		.name = "file-type",
+		.type = &gt_file_type,
+		.offset = offsetof(struct rpki_config, ft),
+		.doc = "Parser for --mode=print",
+	},
 	{ 0 },
 };
 
@@ -891,7 +870,7 @@ is_alphanumeric(int chara)
  * "struct option" is the array that getopt expects.
  * "struct args_flag" is our option metadata.
  */
-static int
+static void
 construct_getopt_options(struct option **_long_opts, char **_short_opts)
 {
 	struct option_field const *opt;
@@ -912,14 +891,8 @@ construct_getopt_options(struct option **_long_opts, char **_short_opts)
 	}
 
 	/* +1 NULL end, means end of array. */
-	long_opts = calloc(total_long_options + 1, sizeof(struct option));
-	if (long_opts == NULL)
-		return pr_enomem();
-	short_opts = malloc(total_short_options + 1);
-	if (short_opts == NULL) {
-		free(long_opts);
-		return pr_enomem();
-	}
+	long_opts = pcalloc(total_long_options + 1, sizeof(struct option));
+	short_opts = pmalloc(total_short_options + 1);
 
 	*_long_opts = long_opts;
 	*_short_opts = short_opts;
@@ -942,7 +915,6 @@ construct_getopt_options(struct option **_long_opts, char **_short_opts)
 	}
 
 	*short_opts = '\0';
-	return 0;
 }
 
 static void
@@ -951,6 +923,14 @@ print_config(void)
 	struct option_field const *opt;
 
 	pr_op_info(PACKAGE_STRING);
+	pr_op_info("  libcrypto:     " OPENSSL_VERSION_TEXT);
+	pr_op_info("  jansson:       " JANSSON_VERSION);
+	pr_op_info("  libcurl:       " LIBCURL_VERSION);
+	pr_op_info("  libxml:        " LIBXML_DOTTED_VERSION);
+	pr_op_info("  libmicrohttpd: %x.%x.%x-%x",
+	    MHD_VERSION >> 24, (MHD_VERSION >> 16) & 0xFF,
+	    (MHD_VERSION >> 8) & 0xFF, MHD_VERSION & 0xFF);
+
 	pr_op_info("Configuration {");
 
 	FOREACH_OPTION(options, opt, 0xFFFF)
@@ -960,47 +940,46 @@ print_config(void)
 	pr_op_info("}");
 }
 
-static int
+static void
 set_default_values(void)
 {
 	static char const *recursive_rsync_args[] = {
-		"--recursive",
-		"--delete",
-		"--times",
-		"--contimeout=20",
-		"--timeout=15",
-		"--max-size=20MB",
-		"$REMOTE",
-		"$LOCAL",
-	};
+		"-rtz", "--delete", "--omit-dir-times",
 
-	static char const *flat_rsync_args[] = {
-		"--times",
-		"--contimeout=20",
-		"--timeout=15",
-		"--max-size=20MB",
-		"--dirs",
-		"$REMOTE",
-		"$LOCAL",
-	};
+		"--contimeout=20", "--max-size=20MB", "--timeout=15",
 
-	int error;
+		"--exclude=.*",
+		"--include=*/", "--include=*.cer", "--include=*.crl",
+		"--include=*.gbr", "--include=*.mft", "--include=*.roa",
+		"--exclude=*",
+
+		"$REMOTE", "$LOCAL",
+	};
+	static char const *flat_rsync_args[] = { "<deprecated>" };
+	static char const *addrs[] = {
+#ifdef __linux__
+		"::"
+#else
+		"0.0.0.0", "::"
+#endif
+	};
 
 	/*
 	 * Values that might need to be freed WILL be freed, so use heap
 	 * duplicates.
 	 */
 
-	error = string_array_init(&rpki_config.server.address, NULL, 0);
-	if (error)
-		return error;
+	rpki_config.tal = NULL;
+	rpki_config.local_repository = pstrdup("/tmp/fort/repository");
+	rpki_config.shuffle_tal_uris = false;
+	rpki_config.maximum_certificate_depth = 32;
+	rpki_config.slurm = NULL;
+	rpki_config.mode = SERVER;
+	rpki_config.work_offline = false;
+	rpki_config.daemon = false;
 
-	rpki_config.server.port = strdup("323");
-	if (rpki_config.server.port == NULL) {
-		error = pr_enomem();
-		goto revert_address;
-	}
-
+	string_array_init(&rpki_config.server.address, addrs, ARRAY_LEN(addrs));
+	rpki_config.server.port = pstrdup("323");
 	rpki_config.server.backlog = SOMAXCONN;
 	rpki_config.server.interval.validation = 3600;
 	rpki_config.server.interval.refresh = 3600;
@@ -1008,93 +987,50 @@ set_default_values(void)
 	rpki_config.server.interval.expire = 7200;
 	rpki_config.server.deltas_lifetime = 2;
 
-	rpki_config.tal = NULL;
-	rpki_config.slurm = NULL;
-
-	rpki_config.local_repository = strdup("/tmp/fort/repository");
-	if (rpki_config.local_repository == NULL) {
-		error = pr_enomem();
-		goto revert_port;
-	}
-
-	rpki_config.sync_strategy = RSYNC_ROOT_EXCEPT_TA;
-	rpki_config.shuffle_tal_uris = false;
-	rpki_config.maximum_certificate_depth = 32;
-	rpki_config.mode = SERVER;
-	rpki_config.work_offline = false;
-	rpki_config.daemon = false;
+	rpki_config.prometheus.port = 0;
 
 	rpki_config.rsync.enabled = true;
 	rpki_config.rsync.priority = 50;
-	rpki_config.rsync.strategy = RSYNC_ROOT_EXCEPT_TA;
+	rpki_config.rsync.strategy = pstrdup("<deprecated>");
 	rpki_config.rsync.retry.count = 1;
 	rpki_config.rsync.retry.interval = 4;
-	rpki_config.rsync.program = strdup("rsync");
-	if (rpki_config.rsync.program == NULL) {
-		error = pr_enomem();
-		goto revert_repository;
-	}
-
-	error = string_array_init(&rpki_config.rsync.args.recursive,
-	    recursive_rsync_args, ARRAY_LEN(recursive_rsync_args));
-	if (error)
-		goto revert_rsync_program;
-
-	error = string_array_init(&rpki_config.rsync.args.flat,
+	rpki_config.rsync.transfer_timeout = 900;
+	rpki_config.rsync.program = pstrdup("rsync");
+	string_array_init(&rpki_config.rsync.args.flat,
 	    flat_rsync_args, ARRAY_LEN(flat_rsync_args));
-	if (error)
-		goto revert_recursive_array;
+	string_array_init(&rpki_config.rsync.args.recursive,
+	    recursive_rsync_args, ARRAY_LEN(recursive_rsync_args));
 
-	/* By default, has a higher priority than rsync */
 	rpki_config.http.enabled = true;
+	/* Higher priority than rsync by default */
 	rpki_config.http.priority = 60;
 	rpki_config.http.retry.count = 1;
 	rpki_config.http.retry.interval = 4;
-	rpki_config.http.user_agent = strdup(PACKAGE_NAME "/" PACKAGE_VERSION);
-	if (rpki_config.http.user_agent == NULL) {
-		error = pr_enomem();
-		goto revert_flat_array;
-	}
+	rpki_config.http.user_agent = pstrdup(PACKAGE_NAME "/" PACKAGE_VERSION);
+	rpki_config.http.max_redirs = 10;
 	rpki_config.http.connect_timeout = 30;
-	rpki_config.http.transfer_timeout = 0;
+	rpki_config.http.transfer_timeout = 900;
 	rpki_config.http.low_speed_limit = 100000;
 	rpki_config.http.low_speed_time = 10;
-	rpki_config.http.max_file_size = 1000000000;
+	rpki_config.http.max_file_size = 2000000000;
 	rpki_config.http.ca_path = NULL; /* Use system default */
-
-	/*
-	 * TODO (later) Same values as http.*, delete when rrdp.* is fully
-	 * deprecated
-	 */
-	rpki_config.rrdp.enabled = rpki_config.http.enabled;
-	rpki_config.rrdp.priority = rpki_config.http.priority;
-	rpki_config.rrdp.retry.count = rpki_config.http.retry.count;
-	rpki_config.rrdp.retry.interval = rpki_config.http.retry.interval;
-
-	rpki_config.log.color = false;
-	rpki_config.log.filename_format = FNF_GLOBAL;
-	rpki_config.log.level = LOG_WARNING;
-	rpki_config.log.output = CONSOLE;
+	rpki_config.http.proxy = NULL;
 
 	rpki_config.log.enabled = true;
-	rpki_config.log.output = CONSOLE;
-	rpki_config.log.level = LOG_WARNING;
+	rpki_config.log.tag = NULL;
 	rpki_config.log.color = false;
 	rpki_config.log.filename_format = FNF_GLOBAL;
+	rpki_config.log.level = LOG_WARNING;
+	rpki_config.log.output = CONSOLE;
 	rpki_config.log.facility = LOG_DAEMON;
-	rpki_config.log.tag = NULL;
 
 	rpki_config.validation_log.enabled = false;
-	rpki_config.validation_log.output = CONSOLE;
-	rpki_config.validation_log.level = LOG_WARNING;
+	rpki_config.validation_log.tag = pstrdup("Validation");
 	rpki_config.validation_log.color = false;
 	rpki_config.validation_log.filename_format = FNF_GLOBAL;
+	rpki_config.validation_log.level = LOG_WARNING;
+	rpki_config.validation_log.output = CONSOLE;
 	rpki_config.validation_log.facility = LOG_DAEMON;
-	rpki_config.validation_log.tag = strdup("Validation");
-	if (rpki_config.validation_log.tag == NULL) {
-		error = pr_enomem();
-		goto revert_validation_log_tag;
-	}
 
 	rpki_config.output.roa = NULL;
 	rpki_config.output.bgpsec = NULL;
@@ -1102,49 +1038,30 @@ set_default_values(void)
 
 	rpki_config.asn1_decode_max_stack = 4096; /* 4kB */
 	rpki_config.stale_repository_period = 43200; /* 12 hours */
-
 	rpki_config.init_tals = false;
-	rpki_config.init_tal_locations = 0;
+	rpki_config.init_tal0s = false;
 
-	/* Common scenario is to connect 1 router or a couple of them */
 	rpki_config.thread_pool.server.max = 20;
-	/* Usually 5 TALs, let a few more available */
 	rpki_config.thread_pool.validation.max = 5;
-
-	return 0;
-
-revert_validation_log_tag:
-	free(rpki_config.http.user_agent);
-revert_flat_array:
-	string_array_cleanup(&rpki_config.rsync.args.flat);
-revert_recursive_array:
-	string_array_cleanup(&rpki_config.rsync.args.recursive);
-revert_rsync_program:
-	free(rpki_config.rsync.program);
-revert_repository:
-	free(rpki_config.local_repository);
-revert_port:
-	free(rpki_config.server.port);
-revert_address:
-	string_array_cleanup(&rpki_config.server.address);
-	return error;
-}
-
-static bool
-valid_output_file(char const *path)
-{
-	return strcmp(path, "-") == 0 || file_valid(path);
 }
 
 static int
 validate_config(void)
 {
+	char const *proxy;
+
+	if (rpki_config.mode == PRINT_FILE)
+		return 0;
+
+	if (rpki_config.payload != NULL)
+		return pr_op_err("I don't know what '%s' is.",
+		    rpki_config.payload);
+
 	if (rpki_config.tal == NULL)
 		return pr_op_err("The TAL(s) location (--tal) is mandatory.");
 
 	/* A file location at --tal isn't valid when --init-tals is set */
-	if (!valid_file_or_dir(rpki_config.tal, !rpki_config.init_tals, true,
-	    pr_op_err))
+	if (!valid_file_or_dir(rpki_config.tal, !rpki_config.init_tals))
 		return pr_op_err("Invalid TAL(s) location.");
 
 	/* Ignore the other checks */
@@ -1157,21 +1074,16 @@ validate_config(void)
 	    rpki_config.server.interval.retry)
 		return pr_op_err("Expire interval must be greater than refresh and retry intervals");
 
-	if (rpki_config.output.roa != NULL &&
-	    !valid_output_file(rpki_config.output.roa))
-		return pr_op_err("Invalid output.roa file.");
-
-	if (rpki_config.output.bgpsec != NULL &&
-	    !valid_output_file(rpki_config.output.bgpsec))
-		return pr_op_err("Invalid output.bgpsec file.");
-
-	if (rpki_config.slurm != NULL &&
-	    !valid_file_or_dir(rpki_config.slurm, true, true, pr_op_err))
+	if (rpki_config.slurm != NULL && !valid_file_or_dir(rpki_config.slurm, true))
 		return pr_op_err("Invalid slurm location.");
 
-	/* TODO (later) Remove when sync-strategy is fully deprecated */
-	if (!rpki_config.rsync.enabled)
-		config_set_sync_strategy(RSYNC_OFF);
+	if (rpki_config.http.proxy == NULL) {
+		proxy = curl_getenv("https_proxy");
+		if (proxy == NULL)
+			proxy = curl_getenv("HTTPS_PROXY");
+		if (proxy != NULL && proxy[0] != '\0')
+			rpki_config.http.proxy = pstrdup(proxy);
+	}
 
 	return 0;
 }
@@ -1184,6 +1096,9 @@ print_usage(FILE *stream, bool print_doc)
 
 	fprintf(stream, "Usage: %s\n", program_name);
 	FOREACH_OPTION(options, option, AVAILABILITY_GETOPT) {
+		if (option->deprecated)
+			continue;
+
 		fprintf(stream, "\t[");
 		fprintf(stream, "--%s", option->name);
 
@@ -1211,7 +1126,6 @@ print_usage(FILE *stream, bool print_doc)
 	}
 }
 
-
 static int
 handle_opt(int opt)
 {
@@ -1219,6 +1133,10 @@ handle_opt(int opt)
 
 	FOREACH_OPTION(options, option, AVAILABILITY_GETOPT) {
 		if (option->id == opt) {
+			if (option->deprecated)
+				pr_op_warn("Warning: '%s' is deprecated.",
+				    option->name);
+
 			return is_rpki_config_field(option)
 			    ? option->type->parse.argv(option, optarg,
 			          get_rpki_config_field(option))
@@ -1239,15 +1157,11 @@ handle_flags_config(int argc, char **argv)
 	int error;
 
 	program_name = argv[0];
-	error = set_default_values();
-	if (error)
-		return error;
+	set_default_values();
 
 	long_opts = NULL;
 	short_opts = NULL;
-	error = construct_getopt_options(&long_opts, &short_opts);
-	if (error)
-		goto end; /* Error msg already printed. */
+	construct_getopt_options(&long_opts, &short_opts);
 
 	while ((opt = getopt_long(argc, argv, short_opts, long_opts, NULL))
 	    != -1) {
@@ -1256,16 +1170,8 @@ handle_flags_config(int argc, char **argv)
 			goto end;
 	}
 
-	/*
-	 * This triggers when the user runs something like
-	 * `rpki-validator disable-rsync` instead of
-	 * `rpki-validator --disable-rsync`.
-	 * This program does not have unflagged payload.
-	 */
-	if (optind < argc) {
-		error = pr_op_err("I don't know what '%s' is.", argv[optind]);
-		goto end;
-	}
+	if (optind < argc)
+		rpki_config.payload = pstrdup(argv[optind]);
 
 	error = validate_config();
 	if (error)
@@ -1367,6 +1273,12 @@ config_get_deltas_lifetime(void)
 	return rpki_config.server.deltas_lifetime;
 }
 
+unsigned int
+config_get_prometheus_port(void)
+{
+	return rpki_config.prometheus.port;
+}
+
 char const *
 config_get_slurm(void)
 {
@@ -1383,12 +1295,6 @@ char const *
 config_get_local_repository(void)
 {
 	return rpki_config.local_repository;
-}
-
-bool
-config_get_shuffle_tal_uris(void)
-{
-	return rpki_config.shuffle_tal_uris;
 }
 
 unsigned int
@@ -1493,12 +1399,6 @@ config_get_rsync_priority(void)
 	return rpki_config.rsync.priority;
 }
 
-enum rsync_strategy
-config_get_rsync_strategy(void)
-{
-	return rpki_config.rsync.strategy;
-}
-
 unsigned int
 config_get_rsync_retry_count(void)
 {
@@ -1511,6 +1411,12 @@ config_get_rsync_retry_interval(void)
 	return rpki_config.rsync.retry.interval;
 }
 
+long
+config_get_rsync_transfer_timeout(void)
+{
+	return rpki_config.rsync.transfer_timeout;
+}
+
 char *
 config_get_rsync_program(void)
 {
@@ -1518,22 +1424,9 @@ config_get_rsync_program(void)
 }
 
 struct string_array const *
-config_get_rsync_args(bool is_ta)
+config_get_rsync_args(void)
 {
-	switch (rpki_config.rsync.strategy) {
-	case RSYNC_ROOT:
-		return &rpki_config.rsync.args.recursive;
-	case RSYNC_ROOT_EXCEPT_TA:
-		return is_ta
-		    ? &rpki_config.rsync.args.flat
-		    : &rpki_config.rsync.args.recursive;
-	case RSYNC_STRICT:
-		return &rpki_config.rsync.args.flat;
-	default:
-		break;
-	}
-
-	pr_crit("Invalid rsync strategy: '%u'", rpki_config.rsync.strategy);
+	return &rpki_config.rsync.args.recursive;
 }
 
 bool
@@ -1561,9 +1454,21 @@ config_get_http_retry_interval(void)
 }
 
 char const *
+config_get_http_proxy(void)
+{
+	return rpki_config.http.proxy;
+}
+
+char const *
 config_get_http_user_agent(void)
 {
 	return rpki_config.http.user_agent;
+}
+
+unsigned int
+config_get_max_redirs(void)
+{
+	return rpki_config.http.max_redirs;
 }
 
 long
@@ -1590,7 +1495,7 @@ config_get_http_low_speed_time(void)
 	return rpki_config.http.low_speed_time;
 }
 
-long
+curl_off_t
 config_get_http_max_file_size(void)
 {
 	return rpki_config.http.max_file_size;
@@ -1627,21 +1532,21 @@ config_get_asn1_decode_max_stack(void)
 }
 
 unsigned int
-config_get_stale_repository_period(void)
-{
-	return rpki_config.stale_repository_period;
-}
-
-unsigned int
 config_get_thread_pool_server_max(void)
 {
 	return rpki_config.thread_pool.server.max;
 }
 
-unsigned int
-config_get_thread_pool_validation_max(void)
+enum file_type
+config_get_file_type(void)
 {
-	return rpki_config.thread_pool.validation.max;
+	return rpki_config.ft;
+}
+
+char const *
+config_get_payload(void)
+{
+	return rpki_config.payload;
 }
 
 void
@@ -1664,61 +1569,5 @@ free_rpki_config(void)
 	FOREACH_OPTION(options, option, 0xFFFF)
 		if (is_rpki_config_field(option) && option->type->free != NULL)
 			option->type->free(get_rpki_config_field(option));
-}
-
-/*
- * "To be deprecated" section
- */
-void
-config_set_rrdp_enabled(bool value)
-{
-	rpki_config.rrdp.enabled = value;
-}
-
-void
-config_set_sync_strategy(enum rsync_strategy value)
-{
-	rpki_config.sync_strategy = value;
-}
-
-void
-config_set_rsync_strategy(enum rsync_strategy value)
-{
-	rpki_config.rsync.strategy = value;
-}
-
-void
-config_set_rrdp_priority(unsigned int value)
-{
-	rpki_config.rrdp.priority = value;
-}
-
-void
-config_set_http_priority(unsigned int value)
-{
-	rpki_config.http.priority = value;
-}
-
-void
-config_set_rrdp_retry_count(unsigned int value)
-{
-	rpki_config.rrdp.retry.count = value;
-}
-
-void
-config_set_http_retry_count(unsigned int value)
-{
-	rpki_config.http.retry.count = value;
-}
-
-void
-config_set_rrdp_retry_interval(unsigned int value)
-{
-	rpki_config.rrdp.retry.interval = value;
-}
-
-void
-config_set_http_retry_interval(unsigned int value)
-{
-	rpki_config.http.retry.interval = value;
+	free(rpki_config.payload);
 }

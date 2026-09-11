@@ -26,26 +26,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define UTHASH_VERSION 2.1.0
 
-#include <string.h>   /* memcmp, memset, strlen */
-#include <stddef.h>   /* ptrdiff_t */
-#include <stdlib.h>   /* exit */
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
-/* These macros use decltype or the earlier __typeof GNU extension.
-   As decltype is only available in newer compilers (VS2010 or gcc 4.3+
-   when compiling c++ source) this code uses whatever method is needed
-   or, for VS2008 where neither is available, uses casting workarounds. */
 #if !defined(DECLTYPE) && !defined(NO_DECLTYPE)
-#if defined(_MSC_VER)   /* MS compiler */
-#if _MSC_VER >= 1600 && defined(__cplusplus)  /* VS2010 or newer in C++ mode */
-#define DECLTYPE(x) (decltype(x))
-#else                   /* VS2008 or older (or VS2010 in C mode) */
-#define NO_DECLTYPE
-#endif
-#elif defined(__BORLANDC__) || defined(__ICCARM__) || defined(__LCC__) || defined(__WATCOMC__)
-#define NO_DECLTYPE
-#else                   /* GNU, Sun and other compilers */
 #define DECLTYPE(x) (__typeof(x))
-#endif
 #endif
 
 #ifdef NO_DECLTYPE
@@ -62,22 +51,6 @@ do {                                                                            
 } while (0)
 #endif
 
-/* a number of the hash function use uint32_t which isn't defined on Pre VS2010 */
-#if defined(_WIN32)
-#if defined(_MSC_VER) && _MSC_VER >= 1600
-#include <stdint.h>
-#elif defined(__WATCOMC__) || defined(__MINGW32__) || defined(__CYGWIN__)
-#include <stdint.h>
-#else
-typedef unsigned int uint32_t;
-typedef unsigned char uint8_t;
-#endif
-#elif defined(__GNUC__) && !defined(__VXWORKS__)
-#include <stdint.h>
-#else
-typedef unsigned int uint32_t;
-typedef unsigned char uint8_t;
-#endif
 
 #ifndef uthash_malloc
 #define uthash_malloc(sz) malloc(sz)      /* malloc fcn                      */

@@ -1,4 +1,4 @@
-.TH fort 8 "2023-02-06" "v1.5.4" "FORT validator"
+.TH fort 8 "2026-05-29" "v1.6.8" "FORT validator"
 
 .SH NAME
 fort \- RPKI validator and RTR server
@@ -18,19 +18,19 @@ fort \- RPKI validator and RTR server
 
 .SH DESCRIPTION
 
-Fort is an RPKI "Relying Party" (RP). It's an artifact that validates Route
-Origin Attestations (ROAs) and BGPsec Router Keys, by way of a Public Key
+Fort is an RPKI "Relying Party" (RP), an artifact that validates Route
+Origin Attestations (ROAs) by way of a Public Key
 Infrastructure (PKI). ROAs are employed by routers, to verify BGP routing
 attestations.
 .P
-The main validation input is one or more Trust Anchor Locator (TAL) files
+Its main input is one or more Trust Anchor Locator (TAL) files
 (\fI--tal\fR), which point to the RPKI Trust Anchors (ie. root certificates).
 Fort downloads all the resources governed by the trust anchors into a local
 cache (\fI--local-repository\fR), and proceeds to validate their entirety. The
-output of the validation is a set of trusted ROAs and Router Keys, which are
-printed to files (\fI--output.roa\fR and \fI--output.bgpsec\fR) and/or served to
+output of the validation is a set of VRPs (Validated ROA Payloads), which are
+served to
 routers (\fI--mode=server\fR, \fI--server.address\fR, \fI--server.port\fR)
-through the RTR protocol (version 0 or 1).
+through the RTR protocol (RFC 6810).
 
 .SH OPTIONS
 .TP
@@ -67,8 +67,6 @@ https://www.arin.net/resources/manage/rpki/arin.tal
 https://www.lacnic.net/innovaportal/file/4983/1/lacnic.tal
 .br
 https://tal.rpki.ripe.net/ripe-ncc.tal
-.P
-Please note that ARIN requires that you accept a Relying Party Agreement before you can download their TAL: https://www.arin.net/resources/manage/rpki/rpa.pdf
 .RE
 
 .B \-\-init-as0-tals
@@ -102,45 +100,33 @@ Some configuration options can't be set at the JSON configuration file:
 Other configuration options can be configured exclusively at the JSON
 configuration file:
 .P
+
 .B rsync.program
 .RS 4
 Name of the program needed to invoke an rsync file transfer. The default value
 is "rsync".
 .RE
 .P
+
 .B rsync.arguments-recursive
 .RS 4
 Arguments needed by
 .B rsync.program
 to perform a recursive rsync. The arguments are specified as a JSON string
 array; its default value is:
-[ "--recursive", "--delete", "--times", "--contimeout=20", "--timeout=15",
+[ "-rtz", "--delete", "--omit-dir-times", "--contimeout=20", "--max-size=20MB",
+"--timeout=15", "--include=*/", "--include=*.cer", "--include=*.crl",
+"--include=*.gbr", "--include=*.mft", "--include=*.roa", "--exclude=*",
 "$REMOTE", "$LOCAL" ]
 .P
 FORT will replace "$REMOTE" with the remote URL it needs to download, and
 "$LOCAL" with the target local directory where the file is supposed to be
 dropped.
 .P
-If \fBrsync.program\fR set is \fIrsync\fR (default value), see more about its
-arguments and behavior at \fIrsync(1)\fR.
+See \fIrsync(1)\fR for a description of each argument.
 .RE
 .P
-.B rsync.arguments-flat
-.RS 4
-Arguments needed by
-.B rsync.program
-to perform a single-file rsync. The arguments are specified as a JSON string
-array; its default value is:
-[ "--times", "--contimeout=20", "--timeout=15", "--dirs", "$REMOTE", "$LOCAL" ]
-.P
-FORT will replace "$REMOTE" with the remote URL it needs to download, and
-"$LOCAL" with the target local directory where the file is supposed to be
-dropped.
-.P
-If \fBrsync.program\fR set is \fIrsync\fR (default value), see more about its
-arguments and behavior at \fIrsync(1)\fR.
-.RE
-.P
+
 .B incidences
 .RS 4
 A listing of actions to be performed by validation upon encountering certain
@@ -265,30 +251,6 @@ All the enabled logs will be sent to syslog, so the configured values of
 .RE
 .P
 
-.B \-\-sync-strategy=(\fIoff\fR|\fIstrict\fR|\fIroot\fR|\fIroot-except-ta\fR)
-.RS 4
-This argument \fBwill be DEPRECATED\fR. Use \fB--rsync.strategy\fR or
-\fB--rsync.enabled\fR (if rsync is meant to be disabled) instead.
-.P
-\fIrsync\fR download strategy; states the way rsync URLs are approached during
-downloads.
-.P
-Despite this argument will be deprecated, it still can be utilized. It can have
-one of four values:
-.RS 4
-- \fIoff\fR: will disable rsync execution. So, using \fB--sync-strategy=off\fR
-will be the same as \fB--rsync.enabled=false\fR.
-.br
-- \fIstrict\fR: will be the same as \fB--rsync.strategy=strict\fR.
-.br
-- \fIroot\fR: will be the same as \fB--rsync.strategy=root\fR.
-.br
-- \fIroot-except-ta\fR \fB(default value)\fR: will be the same as
-\fB--rsync.strategy=root-except-ta\fR.
-.RE
-.RE
-.P
-
 .B \-\-work-offline
 .RS 4
 If this flag is activated, Fort will disable all outgoing requests (currently
@@ -299,24 +261,6 @@ at configured \fB--local-repository\fR.
 Otherwise, Fort will perform outgoing requests whenever this is needed. If a
 specific protocol needs to be deactivated, use \fB--rsync.enabled\fR or
 \fB--http.enabled\fR.
-.RE
-.P
-
-.B \-\-shuffle-uris
-.RS 4
-If enabled, FORT will access TAL URLs in random order. This is meant for load
-balancing. If disabled, FORT will access TAL URLs in sequential order.
-.P
-By default, the flag is disabled.
-.P
-This flag is only relevant if the TAL lists more than one URL. Regardless of
-this flag, FORT will stop iterating through the URLs as soon as it finds one
-that yields a successful traversal.
-.P
-If the TAL lists more than one URL, the shuffle is done honoring the priority
-of the protocols (see \fB--rsync.priority\fR and \fB--http.priority\fR). i.e.
-if the HTTP protocol has a higher priority than RSYNC, then all the shuffled
-HTTP URLs will come first.
 .RE
 .P
 
@@ -357,50 +301,60 @@ See more about SLURM configuration at FORT's web docs.
 .RE
 .P
 
-.B \-\-mode=(\fIserver\fR|\fIstandalone\fR)
+.B \-\-mode=(\fIserver\fR|\fIstandalone\fR|\fIprint\fR)
 .RS 4
-Commands the way FORT executes the validation, its possible values are:
+Operation mode.
 .P
-.I server
+.I server \fR(Default)\fI
 .RS 4
-Enable the RTR server using the \fIserver.*\fR arguments.
+Perform validation cycles in perpetuity. (See \fB--server.interval.validation\fR).
+Also, serve resulting VRPs through RTR. (See \fB--server.*\fR.)
 .RE
 .P
 .I standalone
 .RS 4
-Disable the RTR server, the configuration options \fIserver.*\fR are ignored
-and FORT performs an in-place standalone validation.
+Perform single validation cycle, then exit.
 .RE
 .P
-By default, the mode is \fIserver\fR.
+.I print
+.RS 4
+Print a Certificate, CRL or Signed Object (ROA, Manifest or Ghostbusters) in
+standard output.
+.RE
 .RE
 .P
 
 .B \-\-server.address=\fINODE(S)\fR
 .RS 4
-List of hostnames or numeric host addresses the RTR server will be bound to.
-Must resolve to (or be) bindable IP addresses. IPv4 and IPv6 are supported.
+List of hostnames or numeric host addresses the RTR server will be bound to. Must resolve to (or be) bindable IP addresses. IPv4 and IPv6 are supported.
 .P
-The list of addresses must be comma sepparated, and each address must have the
-following format: \fB<address>[#<port>]\fR. Note that the port is optional; in
-case that a port isn't specified, the value of \fI--server.port\fR will be
-utilized with the corresponding address.
+The address list must be comma-separated, and each address must have the following format: \fB<address>[#<port>]\fR. The port defaults to \fI--server.port\fR.
 .P
-Here are some examples of valid values for this argument:
+Here are some examples:
 .br
-- \fI--server.address="localhost"\fR: will bind to 'localhost' and the
-configured port at \fI--server.port\fR.
+- \fI--server.address="localhost"\fR: Bind to localhost, port \fI--server.port\fR.
 .br
-- \fI--server.address="localhost,::1#8324"\fR: same as the previous example,
-and also will bind to IPv6 address '::1' at the port '8324'.
+- \fI--server.address="localhost, ::1#8324"\fR: Same as above, and also bind to \fI[::1]:8324\fR.
 .br
-- \fI--server.address="localhost#8323,::1#8324"\fR: will bind to 'localhost' at
-port '8323', and to '::1' port '8324'. The value of \fI--server.port\fR isn't
-utilized.
+- \fI--server.address="localhost#8323, ::1#8324"\fR: Bind to \fIlocalhost\fR on port 8323, and to \fI[::1]:8324\fR. (\fI--server.port\fR is ignored.)
 .P
-If this field is omitted, FORT will attempt to bind the server using the IP
-address \fIINADDR_ANY\fR (for an IPv4 address) or \fIIN6ADDR_ANY_INIT\fR (for
-an IPv6 address). See \fBgetaddrinfo(3)\fR.
+Use wildcards to bind to all available addresses. Note that, for historical reasons, Linux is a bit strange:
+.P
+BSDs:
+.P
+- \fI0.0.0.0\fR : Bind to all available IPv4 addresses
+.br
+- \fI::\fR : Bind to all available IPv6 addresses
+.br
+- \fI0.0.0.0, ::\fR : Bind to all available IPv4 and IPv6 addresses
+.P
+Linux:
+.P
+- \fI0.0.0.0\fR : Bind to all available IPv4 addresses
+.br
+- \fI::\fR : Bind to all available IPv4 and IPv6 addresses
+.br
+- \fI0.0.0.0, ::\fR : Error
 .RE
 .P
 
@@ -495,6 +449,16 @@ When routers first connect to Fort, they request a snapshot of the validation re
 During each validation cycle, Fort generates a new snapshot, as well as the deltas needed to build the new snapshot from the previous one. These are all stored in RAM. \fI--server.deltas.lifetime\fR is the number of iterations a set of deltas will be kept before being deallocated. (Recall that every iteration lasts \fI--server.interval.validation\fR seconds, plus however long the validation takes.)
 .P
 If a router lags behind, to the point Fort has already deleted the deltas it needs to update the router’s snapshot, Fort will have to fall back to fetch the entire latest snapshot instead.
+.RE
+.P
+
+.B \-\-prometheus.port=\fIUNSIGNED_INTEGER\fR
+.RS 4
+TCP port the Prometheus server will be bound to.
+.P
+The Prometheus server requires \fI--prometheus.port\fR to be defined, and \fI--mode\fR to be \fIserver\fR. Otherwise it will not start.
+.P
+Stats are served in openmetrics format.
 .RE
 .P
 
@@ -789,7 +753,7 @@ request at least once. If there was an error requesting the URI, the validator
 will retry at most \fI--http.retry.count\fR times to fetch the file, waiting
 \fI--http.retry.interval\fR seconds between each retry.
 .P
-By default, the value is \fI2\fR.
+By default, the value is \fI4\fR.
 .RE
 .P
 
@@ -841,7 +805,7 @@ unlimited time (default value).
 The value specified (either by the argument or the default value) is utilized
 in libcurl’s option \fICURLOPT_TIMEOUT\fR.
 .P
-By default, it has a value of \fI0\fR.
+By default, it has a value of \fI900\fR.
 .RE
 .P
 
@@ -873,7 +837,7 @@ Default: \fI10\fR
 .RS 4
 Maximum amount of bytes files are allowed to length during HTTP transfers.
 .P
-Default: \fI1000000000\fR (1 GB)
+Default: \fI2000000000\fR (2 GB)
 .RE
 .P
 
@@ -900,27 +864,12 @@ By default, the path has a NULL value.
 .RE
 .P
 
-.B \-\-rrdp.enabled=\fItrue\fR|\fIfalse\fR
+.B \-\-http.proxy=\fIURL\fR
 .RS 4
-This argument \fBwill be DEPRECATED\fR. Use \fB--http.enabled\fR instead.
-.RE
 .P
-
-.B \-\-rrdp.priority=\fIUNSIGNED_INTEGER\fR
-.RS 4
-This argument \fBwill be DEPRECATED\fR. Use \fB--http.priority\fR instead.
-.RE
+Set a proxy to use for HTTP transfers.
 .P
-
-.B \-\-rrdp.retry.count=\fIUNSIGNED_INTEGER\fR
-.RS 4
-This argument \fBwill be DEPRECATED\fR. Use \fB--http.retry.count\fR instead.
-.RE
-.P
-
-.B \-\-rrdp.retry.interval=\fIUNSIGNED_INTEGER\fR
-.RS 4
-This argument \fBwill be DEPRECATED\fR. Use \fB--http.retry.interval\fR instead.
+It can be a hostname, a dotted numerical IPv4 address or a numerical IPv6 address enclosed in brackets. The port defaults to 1080; append \fI:<port>\fR to override.
 .RE
 .P
 
@@ -966,78 +915,6 @@ requests.
 .RE
 .P
 
-.B \-\-rsync.strategy=(\fIstrict\fR|\fIroot\fR|\fIroot-except-ta\fR)
-.RS 4
-\fIrsync\fR download strategy; states the way rsync URLs are approached during
-downloads. It can have one of three values:
-.IR strict ", "
-.IR root ", "
-.IB "root-except-ta" "(default value)" \fR. \fR
-.P
-.I strict
-.RS 4
-In order to enable this strategy, FORT must be compiled using the flag:
-ENABLE\_STRICT\_STRATEGY. e.g.
-\fB $ make FORT_FLAGS='-DENABLE_STRICT_STRATEGY'\fR
-.P
-RSYNC every repository publication point separately. Only skip publication
-points that have already been downloaded during the current validation cycle.
-(Assuming each synchronization is recursive.)
-.P
-For example, suppose the validator gets certificates whose caRepository access
-methods (in their Subject Information Access extensions) point to the following
-publication points:
-.P
-1. rsync://rpki.example.com/foo/bar/
-.br
-2. rsync://rpki.example.com/foo/qux/
-.br
-3. rsync://rpki.example.com/foo/bar/
-.br
-4. rsync://rpki.example.com/foo/corge/grault/
-.br
-5. rsync://rpki.example.com/foo/corge/
-.br
-6. rsync://rpki.example.com/foo/corge/waldo/
-.P
-A validator following the `strict` strategy would download `bar`, download
-`qux`, skip `bar`, download `corge/grault`, download `corge` and skip
-`corge/waldo`.
-.P
-This is the slowest, but also the strictly correct sync strategy.
-.RE
-.P
-.I root
-.RS 4
-For each publication point found, guess the root of its repository and RSYNC
-that instead. Then skip any subsequent children of said root.
-.P
-(To guess the root of a repository, the validator counts four slashes, and
-prunes the rest of the URL.)
-.P
-Reusing the caRepository URLs from the `strict` strategy (above) as example, a
-validator following the `root` strategy would download
-`rsync://rpki.example.com/foo`, and then skip everything else.
-.P
-Assuming that the repository is specifically structured to be found within as
-few roots as possible, and they contain minimal RPKI-unrelated noise files, this
-is the fastest synchronization strategy. At time of writing, this is true for
-all the current official repositories.
-.RE
-.P
-.I root-except-ta
-.RS 4
-Synchronizes the root certificate (the one pointed by the TAL) in 'strict' mode,
-and once it's validated, synchronizes the rest of the repository in 'root' mode.
-.P
-Useful if you want 'root', but the root certificate is separated from the rest
-of the repository. Also useful if you don't want the validator to download the
-entire repository without first confirming the integrity and legitimacy of the
-root certificate.
-.RE
-.RE
-.P
-
 .B \-\-rsync.retry.count=\fIUNSIGNED_INTEGER\fR
 .RS 4
 Maximum number of retries whenever there's an error executing RSYNC.
@@ -1049,7 +926,7 @@ at least once. If there was an error executing the RSYNC, the validator will
 retry it at most \fI--rsync.retry.count\fR times, waiting
 \fI--rsync.retry.interval\fR seconds between each retry.
 .P
-By default, the value is \fI2\fR.
+By default, the value is \fI4\fR.
 .RE
 .P
 
@@ -1058,6 +935,18 @@ By default, the value is \fI2\fR.
 Period (in seconds) to wait between retries after an RSYNC error ocurred.
 .P
 By default, the value is \fI5\fR.
+.RE
+.P
+
+.B \-\-rsync.transfer\-timeout=\fIUNSIGNED_INTEGER\fR
+.RS 4
+Maximum time in seconds that the rsync process can last.
+.P
+Once the connection is established with the server, the request will last a
+maximum of \fBrsync.transfer-timeout\fR seconds. A value of \fI0\fR means
+unlimited time (default value).
+.P
+By default, it has a value of \fI900\fR.
 .RE
 .P
 
@@ -1161,26 +1050,6 @@ Maximum: \fIUINT_MAX\fR
 Default: \fI20\fR
 .RE
 
-.B \-\-thread-pool.validation.max=\fIUNSIGNED_INTEGER\fR
-.RS 4
-Maximum number of threads that will be spawned at an internal thread pool in
-order to run validation cycles.
-.P
-When a validation cycle begins, one thread per configured TAL is utilized; once
-the whole RPKI tree of the TAL is validated, the thread is returned to the pool.
-.P
-If there are more TALs at \fI--tal\fR than \fI--thread-pool.validation.max\fR
-threads at the pool, is very likely that the validation cycles take a bit more
-of time to complete since only \fI--thread-pool.validation.max\fR threads will
-be working at the same time. E.g. if \fI--thread-pool.validation.max=2\fR and
-the location at \fI--tal\fR has 4 TAL files, only 2 TALs will be validated
-simultaneously while the rest waits in a queue until there's an available thread
-at the pool to attend them.
-.P
-By default, it has a value of \fI5\fR. Minimum allowed value: \fI1\fR,
-maximum allowed value \fI100\fR.
-.RE
-
 .B \-\-asn1-decode-max-stack=\fIUNSIGNED_INTEGER\fR
 .RS 4
 ASN1 decoder max allowed stack size in bytes, utilized to avoid a stack
@@ -1190,41 +1059,10 @@ By default, it has a value of \fI4096\fR (4 kB).
 .RE
 .P
 
-.B \-\-stale-repository-period=\fIUNSIGNED_INTEGER\fR
-.RS 4
-Time period that must lapse to warn about a stale repository (the messages will
-be sent to the operation log). The time lapse starts once the repository
-download has been retried (see \fI--rsync.retry.count\fR and
-\fI--http.retry.count\fR) and failed after such retries.
-.P
-A repository is considered stale if its files can't be fetched due to a
-communication error and this error persists across validation cycles. This kind
-of issues can be due to a local misconfiguration (eg. a firewall that blocks
-incoming data) or a problem at the server (eg. the server is down).
-.P
-Despite who's "fault" is, FORT validator will try to work with the local files
-from \fI--local-repository\fR.
-.P
-The communication errors sent to the operation log, are those related to
-"first level" RPKI servers; commonly this are the servers maintained by the
-RIRs.
-.P
-Currently \fBall\fR the communication errors are logged at the validation log.
-This argument (\fB--stale-repository-period\fR) is merely to send this error
-messages also to the operation log.
-.P
-A value \fBequal to 0\fR means that the communication errors will be logged at
-once.
-.P
-By default, it has a value of \fI43200\fR (12 hours).
-.RE
-.P
-
 .SH EXAMPLES
 .B fort \-\-init-tals \-\-tal=/tmp/tal
 .RS 4
-Download the 5 RIR TALs into the specified directory. ARIN TAL will be
-downloaded only if the user accepts ARIN's RPA.
+Download the 5 RIR TALs into the /tmp/tal directory.
 .RE
 .P
 
@@ -1274,23 +1112,22 @@ validating every 30 minutes, and printing the ROAs CSV in a file.
 This is an example of a valid JSON configuration file with all its members set
 to a specific value:
 .nf
-
 {
   "tal": "/tmp/fort/tal/",
-  "local-repository": "/tmp/fort/repository/",
-  "work-offline": false,
-  "shuffle-uris": true,
+  "local-repository": "/tmp/fort/repository",
   "maximum-certificate-depth": 32,
-  "mode": "server",
-  "daemon": false,
   "slurm": "/tmp/fort/test.slurm",
+  "mode": "server",
+  "work-offline": false,
+  "daemon": false,
+
   "server": {
     "address": [
       "192.0.2.1",
       "2001:db8::1"
     ],
-    "port": "8323",
-    "backlog": 64,
+    "port": 8323,
+    "backlog": 4096,
     "interval": {
       "validation": 3600,
       "refresh": 3600,
@@ -1298,108 +1135,115 @@ to a specific value:
       "expire": 7200
     },
     "deltas": {
-      "lifetime": 4
+      "lifetime": 2
     }
   },
-  "log": {
-    "enabled": true,
-    "level": "warning",
-    "output": "console",
-    "color-output": true,
-    "file-name-format": "local-path",
-    "facility": "daemon",
-    "tag": "Operation"
+
+  "prometheus": {
+    "port": 0
   },
-  "validation-log": {
-    "enabled": false,
-    "level": "warning",
-    "output": "console",
-    "color-output": true,
-    "file-name-format": "local-path",
-    "facility": "daemon",
-    "tag": "Validation"
-  },
-  "http": {
-    "enabled": true,
-    "priority": 60,
-    "retry": {
-      "count": 2,
-      "interval": 5
-    },
-    "user-agent": "fort/1.5.1",
-    "connect-timeout": 30,
-    "transfer-timeout": 0,
-    "idle-timeout": 15,
-    "ca-path": "/usr/local/ssl/certs"
-  },
+
   "rsync": {
     "enabled": true,
     "priority": 50,
-    "strategy": "root-except-ta",
     "retry": {
-      "count": 2,
-      "interval": 5
+      "count": 1,
+      "interval": 4
     },
+    "transfer-timeout": 900,
     "program": "rsync",
     "arguments-recursive": [
-      "--recursive",
+      "-rtz",
       "--delete",
-      "--times",
+      "--omit-dir-times",
       "--contimeout=20",
+      "--max-size=20MB",
       "--timeout=15",
-      "$REMOTE",
-      "$LOCAL"
-    ],
-    "arguments-flat": [
-      "--times",
-      "--contimeout=20",
-      "--timeout=15",
-      "--dirs",
+      "--include=*/",
+      "--include=*.cer",
+      "--include=*.crl",
+      "--include=*.gbr",
+      "--include=*.mft",
+      "--include=*.roa",
+      "--exclude=*",
       "$REMOTE",
       "$LOCAL"
     ]
   },
+
+  "http": {
+    "enabled": true,
+    "priority": 60,
+    "retry": {
+      "count": 1,
+      "interval": 4
+    },
+    "user-agent": "fort/1.6.7",
+    "max-redirs": 10,
+    "connect-timeout": 30,
+    "transfer-timeout": 900,
+    "low-speed-limit": 100000,
+    "low-speed-time": 10,
+    "max-file-size": 2000000000,
+    "ca-path": "/usr/local/ssl/certs",
+    "proxy": "https://example.com:1234"
+  },
+
+  "log": {
+    "enabled": true,
+    "output": "console",
+    "level": "warning",
+    "tag": "Op",
+    "facility": "daemon",
+    "file-name-format": "global-url",
+    "color-output": false
+  },
+
+  "validation-log": {
+    "enabled": false,
+    "output": "console",
+    "level": "warning",
+    "tag": "Validation",
+    "facility": "daemon",
+    "file-name-format": "global-url",
+    "color-output": false
+  },
+
   "incidences": [
     {
       "name": "incid-hashalg-has-params",
       "action": "ignore"
-    },
-    {
+    }, {
       "name": "incid-obj-not-der-encoded",
       "action": "ignore"
-    },
-    {
+    }, {
       "name": "incid-file-at-mft-not-found",
       "action": "error"
-    },
-    {
+    }, {
       "name": "incid-file-at-mft-hash-not-match",
       "action": "error"
-    },
-    {
+    }, {
       "name": "incid-mft-stale",
       "action": "error"
-    },
-    {
+    }, {
       "name": "incid-crl-stale",
       "action": "error"
     }
   ],
+
   "output": {
     "roa": "/tmp/fort/roas.csv",
     "bgpsec": "/tmp/fort/bgpsec.csv",
     "format": "csv"
   },
+
+  "asn1-decode-max-stack": 4096,
+
   "thread-pool": {
     "server": {
       "max": 20
-    },
-    "validation": {
-      "max": 5
     }
-  },
-  "asn1-decode-max-stack": 4096,
-  "stale-repository-period": 43200
+  }
 }
 .fi
 .RE
@@ -1474,19 +1318,8 @@ well as some dummy Router Keys (BGPsec) info:
 .P
 
 .\".SH COPYRIGHT
-.\" FORT-validator 2021
+.\" FORT-validator 2026
 .\" MIT License
 
 .SH SEE ALSO
-.B Regular man pages
-.RS 4
-.IR getaddrinfo(3) ", " services(5) ", " listen(2) ", " rsync(1)
-.RE
-.P
-
-.B FORTs official documentation
-.RS 4
-More documentation about FORT validator can be consulted at github repository
-(https://github.com/NICMx/FORT-validator) and github website
-(https://nicmx.github.io/FORT-validator/)
-.RE
+https://nicmx.github.io/FORT-validator/

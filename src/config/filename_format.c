@@ -1,11 +1,10 @@
 #include "config/filename_format.h"
 
 #include <getopt.h>
-#include <stdlib.h>
 #include <string.h>
 
-#include "log.h"
 #include "config/str.h"
+#include "log.h"
 
 #define FNF_VALUE_GLOBAL "global-url"
 #define FNF_VALUE_LOCAL "local-path"
