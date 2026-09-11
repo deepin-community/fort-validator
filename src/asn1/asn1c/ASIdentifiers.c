@@ -5,29 +5,28 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "ASIdentifiers.h"
+#include "asn1/asn1c/ASIdentifiers.h"
 
 static asn_TYPE_member_t asn_MBR_ASIdentifiers_1[] = {
 	{ ATF_POINTER, 2, offsetof(struct ASIdentifiers, asnum),
 		(ASN_TAG_CLASS_CONTEXT | (0 << 2)),
 		+1,	/* EXPLICIT tag at current level */
 		&asn_DEF_ASIdentifierChoice,
-		0,
-		{ 0, 0, 0 },
-		0, 0, /* No default value */
+		NULL,
+		{ NULL, NULL, NULL },
+		NULL, NULL, /* No default value */
 		"asnum"
 		},
 	{ ATF_POINTER, 1, offsetof(struct ASIdentifiers, rdi),
 		(ASN_TAG_CLASS_CONTEXT | (1 << 2)),
 		+1,	/* EXPLICIT tag at current level */
 		&asn_DEF_ASIdentifierChoice,
-		0,
-		{ 0, 0, 0 },
-		0, 0, /* No default value */
+		NULL,
+		{ NULL, NULL, NULL },
+		NULL, NULL, /* No default value */
 		"rdi"
 		},
 };
-static const int asn_MAP_ASIdentifiers_oms_1[] = { 0, 1 };
 static const ber_tlv_tag_t asn_DEF_ASIdentifiers_tags_1[] = {
 	(ASN_TAG_CLASS_UNIVERSAL | (16 << 2))
 };
@@ -40,8 +39,6 @@ static asn_SEQUENCE_specifics_t asn_SPC_ASIdentifiers_specs_1 = {
 	offsetof(struct ASIdentifiers, _asn_ctx),
 	asn_MAP_ASIdentifiers_tag2el_1,
 	2,	/* Count of tags in the map */
-	asn_MAP_ASIdentifiers_oms_1,	/* Optional members */
-	2, 0,	/* Root/Additions */
 	-1,	/* First extension addition */
 };
 asn_TYPE_descriptor_t asn_DEF_ASIdentifiers = {
@@ -54,9 +51,8 @@ asn_TYPE_descriptor_t asn_DEF_ASIdentifiers = {
 	asn_DEF_ASIdentifiers_tags_1,	/* Same as above */
 	sizeof(asn_DEF_ASIdentifiers_tags_1)
 		/sizeof(asn_DEF_ASIdentifiers_tags_1[0]), /* 1 */
-	{ 0, 0, SEQUENCE_constraint },
+	{ NULL, NULL, SEQUENCE_constraint },
 	asn_MBR_ASIdentifiers_1,
 	2,	/* Elements count */
 	&asn_SPC_ASIdentifiers_specs_1	/* Additional specs */
 };
-

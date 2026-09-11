@@ -1,17 +1,18 @@
 #include "file.h"
 
-#include <errno.h>
-#include <stdlib.h>
+#include <ftw.h>
+
+#include "alloc.h"
+#include "config/mode.h"
 #include "log.h"
 
-static int
-file_get(char const *file_name, FILE **result, struct stat *stat,
-    char const *mode)
+int
+file_open(char const *file_name, FILE **result, struct stat *stat)
 {
 	FILE *file;
 	int error;
 
-	file = fopen(file_name, mode);
+	file = fopen(file_name, "rb");
 	if (file == NULL) {
 		error = errno;
 		pr_val_err("Could not open file '%s': %s", file_name,
@@ -38,16 +39,22 @@ fail:
 }
 
 int
-file_open(char const *file_name, FILE **result, struct stat *stat)
+file_write(char const *file_name, char const *mode, FILE **result)
 {
-	return file_get(file_name, result, stat, "rb");
-}
+	FILE *file;
+	int error;
 
-int
-file_write(char const *file_name, FILE **result)
-{
-	struct stat stat;
-	return file_get(file_name, result, &stat, "wb");
+	file = fopen(file_name, mode);
+	if (file == NULL) {
+		error = errno;
+		pr_val_err("Could not open file '%s': %s", file_name,
+		    strerror(error));
+		*result = NULL;
+		return error;
+	}
+
+	*result = file;
+	return 0;
 }
 
 void
@@ -70,11 +77,7 @@ file_load(char const *file_name, struct file_contents *fc)
 		return error;
 
 	fc->buffer_size = stat.st_size;
-	fc->buffer = malloc(fc->buffer_size);
-	if (fc->buffer == NULL) {
-		error = pr_enomem();
-		goto end;
-	}
+	fc->buffer = pmalloc(fc->buffer_size);
 
 	fread_result = fread(fc->buffer, 1, fc->buffer_size, file);
 	if (fread_result < fc->buffer_size) {
@@ -85,7 +88,7 @@ file_load(char const *file_name, struct file_contents *fc)
 			 * code. It literally doesn't say how to get an error
 			 * code.
 			 */
-			pr_val_err("File reading error. The error message is (apparently) '%s'",
+			pr_val_err("File reading error. The error message is (possibly) '%s'",
 			    strerror(error));
 			free(fc->buffer);
 			goto end;
@@ -116,23 +119,25 @@ file_free(struct file_contents *fc)
 	free(fc->buffer);
 }
 
-/*
- * Validate @file_name, if it doesn't exist, this function will create it and
- * close it.
- */
-bool
-file_valid(char const *file_name)
+/* Wrapper for stat(), mostly for the sake of unit test mocking. */
+int
+file_exists(char const *path)
 {
-	FILE *tmp;
-	int error;
+	struct stat meta;
+	return (stat(path, &meta) == 0) ? 0 : errno;
+}
 
-	if (file_name == NULL)
-		return false;
+static int
+rm(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf)
+{
+	pr_op_debug("Deleting %s.", fpath);
+	return (remove(fpath) != 0) ? errno : 0;
+}
 
-	error = file_write(file_name, &tmp);
-	if (error)
-		return false;
-
-	file_close(tmp);
-	return true;
+/* Same as `system("rm -rf <path>")`, but more portable and maaaaybe faster. */
+int
+file_rm_rf(char const *path)
+{
+	/* TODO (performance) optimize that 32 */
+	return nftw(path, rm, 32, FTW_DEPTH | FTW_PHYS);
 }

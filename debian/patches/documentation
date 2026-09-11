@@ -1,3 +1,7 @@
+From: Marco d'Itri <md@linux.it>
+Subject: Document the default usage of CAP_NET_BIND_SERVICE
+Forwarded: not-needed
+
 --- a/man/fort.8
 +++ b/man/fort.8
 @@ -416,9 +416,9 @@ alias are commonly located at \fI/etc/se

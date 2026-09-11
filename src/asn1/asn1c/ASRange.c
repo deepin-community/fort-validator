@@ -5,25 +5,25 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "ASRange.h"
+#include "asn1/asn1c/ASRange.h"
 
 asn_TYPE_member_t asn_MBR_ASRange_1[] = {
 	{ ATF_NOFLAGS, 0, offsetof(struct ASRange, min),
 		(ASN_TAG_CLASS_UNIVERSAL | (2 << 2)),
 		0,
 		&asn_DEF_ASId,
-		0,
-		{ 0, 0, 0 },
-		0, 0, /* No default value */
+		NULL,
+		{ NULL, NULL, NULL },
+		NULL, NULL, /* No default value */
 		"min"
 		},
 	{ ATF_NOFLAGS, 0, offsetof(struct ASRange, max),
 		(ASN_TAG_CLASS_UNIVERSAL | (2 << 2)),
 		0,
 		&asn_DEF_ASId,
-		0,
-		{ 0, 0, 0 },
-		0, 0, /* No default value */
+		NULL,
+		{ NULL, NULL, NULL },
+		NULL, NULL, /* No default value */
 		"max"
 		},
 };
@@ -39,7 +39,6 @@ asn_SEQUENCE_specifics_t asn_SPC_ASRange_specs_1 = {
 	offsetof(struct ASRange, _asn_ctx),
 	asn_MAP_ASRange_tag2el_1,
 	2,	/* Count of tags in the map */
-	0, 0, 0,	/* Optional elements (not needed) */
 	-1,	/* First extension addition */
 };
 asn_TYPE_descriptor_t asn_DEF_ASRange = {
@@ -52,9 +51,8 @@ asn_TYPE_descriptor_t asn_DEF_ASRange = {
 	asn_DEF_ASRange_tags_1,	/* Same as above */
 	sizeof(asn_DEF_ASRange_tags_1)
 		/sizeof(asn_DEF_ASRange_tags_1[0]), /* 1 */
-	{ 0, 0, SEQUENCE_constraint },
+	{ NULL, NULL, SEQUENCE_constraint },
 	asn_MBR_ASRange_1,
 	2,	/* Elements count */
 	&asn_SPC_ASRange_specs_1	/* Additional specs */
 };
-

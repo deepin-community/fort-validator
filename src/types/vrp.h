@@ -1,9 +1,10 @@
 #ifndef SRC_TYPES_VRP_H_
 #define SRC_TYPES_VRP_H_
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <netinet/in.h>
 
 /*
  * A ROA.

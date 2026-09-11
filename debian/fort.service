@@ -5,7 +5,7 @@ Documentation=https://nicmx.github.io/FORT-validator/
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/fort --configuration-file /etc/fort/config.json
+ExecStart=/usr/bin/fort --log.output=syslog --validation-log.output=syslog --configuration-file /etc/fort/config.json
 Type=exec
 User=fort
 Restart=on-failure

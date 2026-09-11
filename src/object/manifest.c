@@ -1,31 +1,59 @@
-#include "manifest.h"
-
-#include <errno.h>
+#include "object/manifest.h"
 
 #include "algorithm.h"
-#include "common.h"
-#include "log.h"
-#include "thread_var.h"
-#include "asn1/decode.h"
-#include "asn1/oid.h"
-#include "asn1/asn1c/GeneralizedTime.h"
 #include "asn1/asn1c/Manifest.h"
+#include "asn1/decode.h"
 #include "crypto/hash.h"
-#include "object/certificate.h"
-#include "object/crl.h"
-#include "object/roa.h"
+#include "log.h"
 #include "object/signed_object.h"
+#include "thread_var.h"
+
+static int
+cage(struct rpki_uri **uri, struct rpki_uri *notif)
+{
+	if (notif == NULL) {
+		/* No need to cage */
+		uri_refget(*uri);
+		return 0;
+	}
+
+	return uri_create_caged(uri,
+	    tal_get_file_name(validation_tal(state_retrieve())), notif,
+	    uri_get_global(*uri), uri_get_global_len(*uri));
+}
 
 static int
 decode_manifest(struct signed_object *sobj, struct Manifest **result)
 {
 	return asn1_decode_octet_string(
-		sobj->sdata.decoded->encapContentInfo.eContent,
+		sobj->sdata->encapContentInfo.eContent,
 		&asn_DEF_Manifest,
 		(void **) result,
-		true,
-		false
+		true
 	);
+}
+
+/*
+ * Expects both arguments to be normalized and CST.
+ */
+static int
+tm_cmp(struct tm *tm1, struct tm *tm2)
+{
+#define TM_CMP(field)							\
+	if (tm1->field < tm2->field)					\
+		return -1;						\
+	if (tm1->field > tm2->field)					\
+		return 1;						\
+
+	TM_CMP(tm_year);
+	TM_CMP(tm_mon);
+	TM_CMP(tm_mday);
+	TM_CMP(tm_hour);
+	TM_CMP(tm_min);
+	TM_CMP(tm_sec);
+	return 0;
+
+#undef TM_CMP
 }
 
 static int
@@ -36,44 +64,46 @@ validate_dates(GeneralizedTime_t *this, GeneralizedTime_t *next)
 	tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,			\
 	tm.tm_hour, tm.tm_min, tm.tm_sec
 
-	time_t thisUpdate;
-	time_t nextUpdate;
-	time_t now;
-	struct tm thisUpdate_tm;
-	struct tm nextUpdate_tm;
+	time_t now_tt;
+	struct tm now;
+	struct tm thisUpdate;
+	struct tm nextUpdate;
 	int error;
 
-	/*
-	 * BTW: We only need the tm variables for error messages, which are
-	 * rarely needed.
-	 * So maybe we could get a small performance boost by postponing the
-	 * calls to localtime_r().
-	 */
-	thisUpdate = asn_GT2time(this, &thisUpdate_tm, false);
-	nextUpdate = asn_GT2time(next, &nextUpdate_tm, false);
+	error = asn_GT2time(this, &thisUpdate);
+	if (error)
+		return pr_val_err("Manifest's thisUpdate date is unparseable.");
+	error = asn_GT2time(next, &nextUpdate);
+	if (error)
+		return pr_val_err("Manifest's nextUpdate date is unparseable.");
 
-	if (difftime(thisUpdate, nextUpdate) > 0) {
+	if (tm_cmp(&thisUpdate, &nextUpdate) > 0) {
 		return pr_val_err(
 		    "Manifest's thisUpdate (" TM_FMT ") > nextUpdate ("
 		        TM_FMT ").",
-		    TM_ARGS(thisUpdate_tm),
-		    TM_ARGS(nextUpdate_tm));
+		    TM_ARGS(thisUpdate),
+		    TM_ARGS(nextUpdate));
 	}
 
-	now = 0;
-	error = get_current_time(&now);
+	now_tt = 0;
+	error = get_current_time(&now_tt);
 	if (error)
 		return error;
+	if (gmtime_r(&now_tt, &now) == NULL) {
+		error = errno;
+		return pr_val_err("gmtime_r(now) error %d: %s", error,
+		    strerror(error));
+	}
 
-	if (difftime(now, thisUpdate) < 0) {
+	if (tm_cmp(&now, &thisUpdate) < 0) {
 		return pr_val_err(
 		    "Manifest is not valid yet. (thisUpdate: " TM_FMT ")",
-		    TM_ARGS(thisUpdate_tm));
+		    TM_ARGS(thisUpdate));
 	}
-	if (difftime(now, nextUpdate) > 0) {
+	if (tm_cmp(&now, &nextUpdate) > 0) {
 		return incidence(INID_MFT_STALE,
 		    "Manifest is stale. (nextUpdate: " TM_FMT ")",
-		    TM_ARGS(nextUpdate_tm));
+		    TM_ARGS(nextUpdate));
 	}
 
 	return 0;
@@ -151,26 +181,86 @@ validate_manifest(struct Manifest *manifest)
 	return 0;
 }
 
-static int
-build_rpp(struct Manifest *mft, struct rpki_uri *mft_uri, bool rrdp_workspace,
-    struct rpp **pp)
+/* Requires list->count > 0 */
+static void
+shuffle_file_list(struct Manifest *mft)
 {
-	int i;
+	unsigned int seed, rnd;
+	unsigned int i, j;
+	struct FileAndHash *tmpfah;
+
+	seed = time(NULL) ^ getpid();
+
+	/* Fisher-Yates shuffle with modulo bias */
+	for (i = 0; i < mft->fileList.list.count - 1; i++) {
+		rnd = rand_r(&seed);
+		j = i + rnd % (mft->fileList.list.count - i);
+		tmpfah = mft->fileList.list.array[j];
+		mft->fileList.list.array[j] = mft->fileList.list.array[i];
+		mft->fileList.list.array[i] = tmpfah;
+	}
+}
+
+/*
+ * Contract:
+ * - Length = 4 (includes dot)
+ * - Not NULL-terminated!
+ * - Can return NULL
+ */
+static char *
+get_extension(IA5String_t *file)
+{
+	return (file->size < 4) ? NULL : (((char *)file->buf) + file->size - 4);
+}
+
+static int
+build_rpp(struct Manifest *mft, struct rpki_uri *notif,
+    struct rpki_uri *mft_uri, struct rpp **pp)
+{
+	char const *tal;
+	unsigned int i;
 	struct FileAndHash *fah;
+	char *ext;
+	int (*rpp_add)(struct rpp *pp, struct rpki_uri *uri);
 	struct rpki_uri *uri;
 	int error;
 
+	if (mft->fileList.list.count == 0)
+		return pr_val_err("Manifest's file list is empty.");
+
+	shuffle_file_list(mft);
+
 	*pp = rpp_create();
-	if (*pp == NULL)
-		return pr_enomem();
+	tal = tal_get_file_name(validation_tal(state_retrieve()));
 
 	for (i = 0; i < mft->fileList.list.count; i++) {
 		fah = mft->fileList.list.array[i];
 
-		error = uri_create_mft(&uri, mft_uri, &fah->file,
-		    rrdp_workspace);
-		if (error == ESKIP)
+		/*
+		 * rsync filters unknown files. We don't want absent unknown
+		 * files to induce RPP rejection, so we'll skip them.
+		 * This contradicts rfc9286#6.4, but it's necessary evil because
+		 * we can't trust the repositories to not accidentally serve
+		 * garbage.
+		 *
+		 * This includes .mft; They're presently not supposed to be
+		 * listed.
+		 */
+		ext = get_extension(&fah->file);
+		if (ext == NULL)
 			continue;
+		else if (strncmp(ext, ".cer", 4) == 0)
+			rpp_add = rpp_add_cer;
+		else if (strncmp(ext, ".roa", 4) == 0)
+			rpp_add = rpp_add_roa;
+		else if (strncmp(ext, ".crl", 4) == 0)
+			rpp_add = rpp_add_crl;
+		else if (strncmp(ext, ".gbr", 4) == 0)
+			rpp_add = rpp_add_gbr;
+		else
+			continue;
+
+		error = uri_create_mft(&uri, tal, notif, mft_uri, &fah->file);
 		/*
 		 * Not handling ENOTRSYNC is fine because the manifest URL
 		 * should have been RSYNC. Something went wrong if an RSYNC URL
@@ -189,7 +279,7 @@ build_rpp(struct Manifest *mft, struct rpki_uri *mft_uri, bool rrdp_workspace,
 		 * - Positive value: file doesn't exist and keep validating
 		 *   manifest.
 		 */
-		error = hash_validate_mft_file("sha256", uri, &fah->hash);
+		error = hash_validate_mft_file(uri, &fah->hash);
 		if (error < 0) {
 			uri_refput(uri);
 			goto fail;
@@ -199,17 +289,7 @@ build_rpp(struct Manifest *mft, struct rpki_uri *mft_uri, bool rrdp_workspace,
 			continue;
 		}
 
-		if (uri_has_extension(uri, ".cer"))
-			error = rpp_add_cert(*pp, uri);
-		else if (uri_has_extension(uri, ".roa"))
-			error = rpp_add_roa(*pp, uri);
-		else if (uri_has_extension(uri, ".crl"))
-			error = rpp_add_crl(*pp, uri);
-		else if (uri_has_extension(uri, ".gbr"))
-			error = rpp_add_ghostbusters(*pp, uri);
-		else
-			uri_refput(uri); /* ignore it. */
-
+		error = rpp_add(*pp, uri);
 		if (error) {
 			uri_refput(uri);
 			goto fail;
@@ -234,17 +314,20 @@ fail:
  * @pp. If @rrdp_workspace is true, use the local RRDP repository.
  */
 int
-handle_manifest(struct rpki_uri *uri, bool rrdp_workspace, struct rpp **pp)
+handle_manifest(struct rpki_uri *uri, struct rpki_uri *notif, struct rpp **pp)
 {
 	static OID oid = OID_MANIFEST;
 	struct oid_arcs arcs = OID2ARCS("manifest", oid);
 	struct signed_object sobj;
-	struct signed_object_args sobj_args;
+	struct ee_cert ee;
 	struct Manifest *mft;
 	STACK_OF(X509_CRL) *crl;
 	int error;
 
 	/* Prepare */
+	error = cage(&uri, notif); /* ref++ */
+	if (error)
+		return error;
 	pr_val_debug("Manifest '%s' {", uri_val_get_printable(uri));
 	fnstack_push_uri(uri);
 
@@ -257,7 +340,7 @@ handle_manifest(struct rpki_uri *uri, bool rrdp_workspace, struct rpp **pp)
 		goto revert_sobj;
 
 	/* Initialize out parameter (@pp) */
-	error = build_rpp(mft, uri, rrdp_workspace, pp);
+	error = build_rpp(mft, notif, uri, pp);
 	if (error)
 		goto revert_manifest;
 
@@ -265,27 +348,25 @@ handle_manifest(struct rpki_uri *uri, bool rrdp_workspace, struct rpp **pp)
 	error = rpp_crl(*pp, &crl);
 	if (error)
 		goto revert_rpp;
-	error = signed_object_args_init(&sobj_args, uri, crl, false);
-	if (error)
-		goto revert_rpp;
+	eecert_init(&ee, crl, false);
 
 	/* Validate everything */
-	error = signed_object_validate(&sobj, &arcs, &sobj_args);
+	error = signed_object_validate(&sobj, &arcs, &ee);
 	if (error)
 		goto revert_args;
 	error = validate_manifest(mft);
 	if (error)
 		goto revert_args;
-	error = refs_validate_ee(&sobj_args.refs, *pp, uri);
+	error = refs_validate_ee(&ee.refs, *pp, uri);
 	if (error)
 		goto revert_args;
 
 	/* Success */
-	signed_object_args_cleanup(&sobj_args);
+	eecert_cleanup(&ee);
 	goto revert_manifest;
 
 revert_args:
-	signed_object_args_cleanup(&sobj_args);
+	eecert_cleanup(&ee);
 revert_rpp:
 	rpp_refput(*pp);
 revert_manifest:
@@ -295,5 +376,6 @@ revert_sobj:
 revert_log:
 	pr_val_debug("}");
 	fnstack_pop();
+	uri_refput(uri); /* ref-- */
 	return error;
 }

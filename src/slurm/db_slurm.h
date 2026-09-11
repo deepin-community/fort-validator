@@ -1,11 +1,11 @@
 #ifndef SRC_SLURM_db_slurm_H_
 #define SRC_SLURM_db_slurm_H_
 
-#include <stdbool.h>
-#include <sys/queue.h>
 #include <openssl/evp.h>
-#include "types/vrp.h"
+#include <sys/queue.h>
+
 #include "types/router_key.h"
+#include "types/vrp.h"
 
 /* Flags to get data from structs */
 #define SLURM_COM_FLAG_NONE		0x00
@@ -29,7 +29,6 @@ struct slurm_bgpsec {
 	unsigned char	*ski;
 	unsigned char	*router_public_key;
 };
-
 
 struct slurm_file_csum {
 	unsigned char csum[EVP_MAX_MD_SIZE];
@@ -68,9 +67,9 @@ int db_slurm_foreach_assertion_bgpsec(struct db_slurm *, bgpsec_foreach_cb,
 void db_slurm_log(struct db_slurm *);
 
 /* Start working on the cache */
-int db_slurm_start_cache(struct db_slurm *);
+void db_slurm_start_cache(struct db_slurm *);
 /* Persist all the data stored at cache and erase cache */
-int db_slurm_flush_cache(struct db_slurm *);
+void db_slurm_flush_cache(struct db_slurm *);
 
 /* Does the SLURM DB has data? */
 bool db_slurm_has_data(struct db_slurm *);

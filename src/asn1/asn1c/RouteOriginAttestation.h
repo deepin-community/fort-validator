@@ -8,27 +8,13 @@
 #ifndef	_RouteOriginAttestation_H_
 #define	_RouteOriginAttestation_H_
 
-
-#include "asn1/asn1c/asn_application.h"
-
-/* Including external dependencies */
-#include "asn1/asn1c/INTEGER.h"
-#include "ASID.h"
-#include "asn1/asn1c/asn_SEQUENCE_OF.h"
-#include "asn1/asn1c/constr_SEQUENCE_OF.h"
-#include "asn1/asn1c/constr_SEQUENCE.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Forward declarations */
-struct ROAIPAddressFamily;
+#include "asn1/asn1c/ASId.h"
+#include "asn1/asn1c/ROAIPAddressFamily.h"
 
 /* RouteOriginAttestation */
 typedef struct RouteOriginAttestation {
 	INTEGER_t	*version	/* DEFAULT 0 */;
-	ASID_t	 asID;
+	ASId_t	 asId;
 	struct RouteOriginAttestation__ipAddrBlocks {
 		A_SEQUENCE_OF(struct ROAIPAddressFamily) list;
 		
@@ -43,12 +29,4 @@ typedef struct RouteOriginAttestation {
 /* Implementation */
 extern asn_TYPE_descriptor_t asn_DEF_RouteOriginAttestation;
 
-#ifdef __cplusplus
-}
-#endif
-
-/* Referred external types */
-#include "ROAIPAddressFamily.h"
-
 #endif	/* _RouteOriginAttestation_H_ */
-#include "asn1/asn1c/asn_internal.h"

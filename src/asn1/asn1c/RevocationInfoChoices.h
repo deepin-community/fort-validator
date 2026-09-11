@@ -8,19 +8,7 @@
 #ifndef	_RevocationInfoChoices_H_
 #define	_RevocationInfoChoices_H_
 
-
-#include "asn1/asn1c/asn_application.h"
-
-/* Including external dependencies */
-#include "asn1/asn1c/asn_SET_OF.h"
-#include "asn1/asn1c/constr_SET_OF.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Forward declarations */
-struct RevocationInfoChoice;
+#include "asn1/asn1c/RevocationInfoChoice.h"
 
 /* RevocationInfoChoices */
 typedef struct RevocationInfoChoices {
@@ -35,12 +23,4 @@ extern asn_TYPE_descriptor_t asn_DEF_RevocationInfoChoices;
 extern asn_SET_OF_specifics_t asn_SPC_RevocationInfoChoices_specs_1;
 extern asn_TYPE_member_t asn_MBR_RevocationInfoChoices_1[1];
 
-#ifdef __cplusplus
-}
-#endif
-
-/* Referred external types */
-#include "RevocationInfoChoice.h"
-
 #endif	/* _RevocationInfoChoices_H_ */
-#include "asn1/asn1c/asn_internal.h"

@@ -5,25 +5,25 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "FileAndHash.h"
+#include "asn1/asn1c/FileAndHash.h"
 
 asn_TYPE_member_t asn_MBR_FileAndHash_1[] = {
 	{ ATF_NOFLAGS, 0, offsetof(struct FileAndHash, file),
 		(ASN_TAG_CLASS_UNIVERSAL | (22 << 2)),
 		0,
 		&asn_DEF_IA5String,
-		0,
-		{ 0, 0, 0 },
-		0, 0, /* No default value */
+		NULL,
+		{ NULL, NULL, NULL },
+		NULL, NULL, /* No default value */
 		"file"
 		},
 	{ ATF_NOFLAGS, 0, offsetof(struct FileAndHash, hash),
 		(ASN_TAG_CLASS_UNIVERSAL | (3 << 2)),
 		0,
 		&asn_DEF_BIT_STRING,
-		0,
-		{ 0, 0, 0 },
-		0, 0, /* No default value */
+		NULL,
+		{ NULL, NULL, NULL },
+		NULL, NULL, /* No default value */
 		"hash"
 		},
 };
@@ -39,7 +39,6 @@ asn_SEQUENCE_specifics_t asn_SPC_FileAndHash_specs_1 = {
 	offsetof(struct FileAndHash, _asn_ctx),
 	asn_MAP_FileAndHash_tag2el_1,
 	2,	/* Count of tags in the map */
-	0, 0, 0,	/* Optional elements (not needed) */
 	-1,	/* First extension addition */
 };
 asn_TYPE_descriptor_t asn_DEF_FileAndHash = {
@@ -52,9 +51,8 @@ asn_TYPE_descriptor_t asn_DEF_FileAndHash = {
 	asn_DEF_FileAndHash_tags_1,	/* Same as above */
 	sizeof(asn_DEF_FileAndHash_tags_1)
 		/sizeof(asn_DEF_FileAndHash_tags_1[0]), /* 1 */
-	{ 0, 0, SEQUENCE_constraint },
+	{ NULL, NULL, SEQUENCE_constraint },
 	asn_MBR_FileAndHash_1,
 	2,	/* Elements count */
 	&asn_SPC_FileAndHash_specs_1	/* Additional specs */
 };
-

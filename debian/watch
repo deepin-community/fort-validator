@@ -1,3 +1,5 @@
-version=4
-opts=filenamemangle=s/.+\/v(\d\S+)\.tar\.gz/fort-validator-$1\.tar\.gz/ \
-  https://github.com/NICMx/FORT-validator/tags .*/(\d+\.\S+)\.tar\.gz
+Version: 5
+
+Template: Github
+Owner: NICMx
+Project: FORT-validator

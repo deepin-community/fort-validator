@@ -2,8 +2,9 @@
  * Copyright (c) 2003, 2004 Lev Walkin <vlm@lionet.info>. All rights reserved.
  * Redistribution and modifications are permitted subject to BSD license.
  */
-#include "asn1/asn1c/asn_internal.h"
 #include "asn1/asn1c/ber_tlv_length.h"
+
+#include "asn1/asn1c/asn_internal.h"
 #include "asn1/asn1c/ber_tlv_tag.h"
 
 ssize_t
@@ -165,4 +166,3 @@ der_tlv_length_serialize(ber_tlv_len_t len, void *bufp, size_t size) {
 
 	return required_size + 1;
 }
-

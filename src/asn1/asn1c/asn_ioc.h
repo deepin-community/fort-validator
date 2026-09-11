@@ -6,13 +6,8 @@
 #ifndef	ASN_IOC_H
 #define	ASN_IOC_H
 
-#include "asn1/asn1c/asn_system.h"		/* Platform-specific types */
+#include "asn1/asn1c/constr_TYPE.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-struct asn_TYPE_descriptor_s;
 struct asn_ioc_cell_s;
 
 /*
@@ -41,10 +36,5 @@ typedef struct asn_ioc_cell_s {
         } *types;
     } open_type;
 } asn_ioc_cell_t;
-
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif	/* ASN_IOC_H */

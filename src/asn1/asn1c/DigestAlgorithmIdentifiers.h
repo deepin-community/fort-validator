@@ -8,16 +8,8 @@
 #ifndef	_DigestAlgorithmIdentifiers_H_
 #define	_DigestAlgorithmIdentifiers_H_
 
-
-#include "asn1/asn1c/asn_application.h"
-
-/* Including external dependencies */
 #include "asn1/asn1c/asn_SET_OF.h"
 #include "asn1/asn1c/constr_SET_OF.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* Forward declarations */
 struct DigestAlgorithmIdentifier;
@@ -35,12 +27,4 @@ extern asn_TYPE_descriptor_t asn_DEF_DigestAlgorithmIdentifiers;
 extern asn_SET_OF_specifics_t asn_SPC_DigestAlgorithmIdentifiers_specs_1;
 extern asn_TYPE_member_t asn_MBR_DigestAlgorithmIdentifiers_1[1];
 
-#ifdef __cplusplus
-}
-#endif
-
-/* Referred external types */
-#include "DigestAlgorithmIdentifier.h"
-
 #endif	/* _DigestAlgorithmIdentifiers_H_ */
-#include "asn1/asn1c/asn_internal.h"

@@ -2,8 +2,8 @@
 #define SRC_ALGORITHM_H_
 
 #include <openssl/x509.h>
+
 #include "asn1/asn1c/AlgorithmIdentifier.h"
-#include "asn1/asn1c/OBJECT_IDENTIFIER.h"
 
 /**
  * This file is an implementation of RFC 7935 (previously 6485) plus RFC 8608

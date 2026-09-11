@@ -8,23 +8,11 @@
 #ifndef	_SignedDataPKCS7_H_
 #define	_SignedDataPKCS7_H_
 
-
-#include "asn1/asn1c/asn_application.h"
-
-/* Including external dependencies */
-#include "CMSVersion.h"
-#include "DigestAlgorithmIdentifiers.h"
-#include "EncapsulatedContentInfoPKCS7.h"
-#include "SignerInfos.h"
-#include "asn1/asn1c/constr_SEQUENCE.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Forward declarations */
-struct CertificateSet;
-struct RevocationInfoChoices;
+#include "asn1/asn1c/CertificateSet.h"
+#include "asn1/asn1c/DigestAlgorithmIdentifiers.h"
+#include "asn1/asn1c/EncapsulatedContentInfoPKCS7.h"
+#include "asn1/asn1c/RevocationInfoChoices.h"
+#include "asn1/asn1c/SignerInfos.h"
 
 /* SignedDataPKCS7 */
 typedef struct SignedDataPKCS7 {
@@ -42,13 +30,4 @@ typedef struct SignedDataPKCS7 {
 /* Implementation */
 extern asn_TYPE_descriptor_t asn_DEF_SignedDataPKCS7;
 
-#ifdef __cplusplus
-}
-#endif
-
-/* Referred external types */
-#include "CertificateSet.h"
-#include "RevocationInfoChoices.h"
-
 #endif	/* _SignedDataPKCS7_H_ */
-#include "asn1/asn1c/asn_internal.h"

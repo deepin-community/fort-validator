@@ -8,18 +8,7 @@
 #ifndef	_ASIdentifiers_H_
 #define	_ASIdentifiers_H_
 
-
-#include "asn1/asn1c/asn_application.h"
-
-/* Including external dependencies */
-#include "asn1/asn1c/constr_SEQUENCE.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Forward declarations */
-struct ASIdentifierChoice;
+#include "asn1/asn1c/ASIdentifierChoice.h"
 
 /* ASIdentifiers */
 typedef struct ASIdentifiers {
@@ -33,12 +22,4 @@ typedef struct ASIdentifiers {
 /* Implementation */
 extern asn_TYPE_descriptor_t asn_DEF_ASIdentifiers;
 
-#ifdef __cplusplus
-}
-#endif
-
-/* Referred external types */
-#include "ASIdentifierChoice.h"
-
 #endif	/* _ASIdentifiers_H_ */
-#include "asn1/asn1c/asn_internal.h"

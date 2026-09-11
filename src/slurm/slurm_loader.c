@@ -1,14 +1,11 @@
 #include "slurm/slurm_loader.h"
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <sys/types.h> /* AF_INET, AF_INET6 (needed in OpenBSD) */
-#include <sys/socket.h> /* AF_INET, AF_INET6 (needed in OpenBSD) */
+#include <errno.h>
 
-#include "log.h"
-#include "config.h"
 #include "common.h"
+#include "config.h"
 #include "crypto/hash.h"
+#include "log.h"
 #include "slurm/slurm_parser.h"
 
 #define SLURM_FILE_EXTENSION	".slurm"
@@ -34,7 +31,7 @@ load_slurm_files(struct slurm_csum_list *csums, struct db_slurm **result)
 	if (error)
 		return error;
 
-	error = process_file_or_dir(config_get_slurm(), SLURM_FILE_EXTENSION,
+	error = foreach_file(config_get_slurm(), SLURM_FILE_EXTENSION,
 	    false, slurm_parse, db);
 	if (error)
 		goto cancel;
@@ -90,6 +87,7 @@ slurm_pfx_assertions_add(struct slurm_prefix *prefix, void *arg)
 	}
 
 	pr_crit("Unknown addr family type: %u", vrp.addr_fam);
+	return EINVAL; /* Warning shutupper */
 }
 
 static int
@@ -131,15 +129,10 @@ __slurm_load_checksums(char const *location, void *arg)
 {
 	struct slurm_csum_list *list;
 	struct slurm_file_csum *csum;
-	int error;
 
-	csum = malloc(sizeof(struct slurm_file_csum));
-	if (csum == NULL)
-		return pr_enomem();
+	csum = pmalloc(sizeof(struct slurm_file_csum));
 
-	error = hash_local_file("sha256", location, csum->csum,
-	    &csum->csum_len);
-	if (error) {
+	if (hash_local_file(location, csum->csum, &csum->csum_len) != 0) {
 		free(csum);
 		return pr_op_err("Calculating slurm hash");
 	}
@@ -171,7 +164,7 @@ slurm_load_checksums(struct slurm_csum_list *csums)
 	SLIST_INIT(csums);
 	csums->list_size = 0;
 
-	error = process_file_or_dir(config_get_slurm(), SLURM_FILE_EXTENSION,
+	error = foreach_file(config_get_slurm(), SLURM_FILE_EXTENSION,
 	    false, __slurm_load_checksums, csums);
 	if (error)
 		destroy_local_csum_list(csums);

@@ -1,10 +1,10 @@
 #--- Alpine build container ---
 FROM alpine:latest AS builder
-ARG FORT_VERSION=1.5.3
+ARG FORT_VERSION=1.6.8
 
 # Install compiler and dependencies
 RUN apk --update --no-cache add build-base autoconf automake pkgconfig jansson-dev check-dev \
-    openssl-dev openssl libexecinfo-dev bsd-compat-headers rsync wget curl-dev libxml2 libxml2-dev
+    openssl-dev openssl bsd-compat-headers rsync wget curl-dev libxml2 libxml2-dev libmicrohttpd-dev
 
 # Download FORT source code
 WORKDIR /root
@@ -20,17 +20,18 @@ RUN ./configure && make && make install
 FROM alpine:latest
 
 # Install dependencies
-RUN apk --update --no-cache add openssl jansson rsync libexecinfo tini libxml2 libcurl
+RUN apk --update --no-cache add openssl jansson rsync tini libxml2 libcurl rtrlib libmicrohttpd
 
-# Install FORT binaries
+# Install FORT
 COPY --from=builder /usr/local/bin/fort /usr/local/bin/fort
 COPY --from=builder /usr/local/share/man/man8/fort.8 /usr/local/share/man/man8/fort.8
 
 # Create required directories
-RUN mkdir -p /var/local/fort && mkdir -p /etc/fort
+RUN mkdir -p /var/local/fort && mkdir -p /etc/fort/tal
 
-# Create a default configuration file
-RUN echo '{"tal":"/etc/fort/tal","local-repository":"/var/local/fort"}' > /etc/fort/fort.conf
+# Create default configuration
+RUN fort --init-tals --tal /etc/fort/tal
+RUN echo '{ "tal":"/etc/fort/tal", "local-repository":"/var/local/fort" }' > /etc/fort/fort.conf
 
 
 # Run FORT via TINI

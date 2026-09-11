@@ -5,16 +5,16 @@
  * 	`asn1c -Werror -fcompound-names -fwide-types -D asn1/asn1c -no-gen-PER -no-gen-example`
  */
 
-#include "RevocationInfoChoices.h"
+#include "asn1/asn1c/RevocationInfoChoices.h"
 
 asn_TYPE_member_t asn_MBR_RevocationInfoChoices_1[] = {
 	{ ATF_POINTER, 0, 0,
 		-1 /* Ambiguous tag (CHOICE?) */,
 		0,
 		&asn_DEF_RevocationInfoChoice,
-		0,
-		{ 0, 0, 0 },
-		0, 0, /* No default value */
+		NULL,
+		{ NULL, NULL, NULL },
+		NULL, NULL, /* No default value */
 		""
 		},
 };
@@ -36,9 +36,8 @@ asn_TYPE_descriptor_t asn_DEF_RevocationInfoChoices = {
 	asn_DEF_RevocationInfoChoices_tags_1,	/* Same as above */
 	sizeof(asn_DEF_RevocationInfoChoices_tags_1)
 		/sizeof(asn_DEF_RevocationInfoChoices_tags_1[0]), /* 1 */
-	{ 0, 0, SET_OF_constraint },
+	{ NULL, NULL, SET_OF_constraint },
 	asn_MBR_RevocationInfoChoices_1,
 	1,	/* Single element */
 	&asn_SPC_RevocationInfoChoices_specs_1	/* Additional specs */
 };
-

@@ -1,42 +1,47 @@
-#include "rtr.h"
+#include "rtr/rtr.h"
 
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
-#include <log.h>
-#include <poll.h>
-#include <pthread.h>
-#include <stdbool.h>
-#include <unistd.h>
 #include <netdb.h>
-#include <sys/types.h>
-#include <sys/socket.h>
+#include <poll.h>
+#include <string.h>
 
+#include "common.h"
 #include "config.h"
-#include "types/address.h"
 #include "data_structure/array_list.h"
-#include "rtr/pdu.h"
+#include "log.h"
+#include "rtr/db/vrps.h"
+#include "rtr/pdu_handler.h"
+#include "rtr/pdu_sender.h"
+#include "stats.h"
 #include "thread/thread_pool.h"
+
+struct rtr_server {
+	int fd;
+	/* Printable address to which the server was bound. */
+	char *addr;
+};
+
+struct server_init_ctx {
+	/* Server binding address string, exactly as received from the user. */
+	char const *input_addr;
+#ifdef __linux__
+	/* Have we already attempted to bind a wildcard address? */
+	bool wildcard_found;
+#endif
+};
 
 static pthread_t server_thread;
 static volatile bool stop_server_thread;
 
 STATIC_ARRAY_LIST(server_arraylist, struct rtr_server)
-STATIC_ARRAY_LIST(client_arraylist, struct rtr_client)
+STATIC_ARRAY_LIST(client_arraylist, struct pdu_stream *)
 
 static struct server_arraylist servers;
 static struct client_arraylist clients;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-struct thread_pool *request_handlers;
-
-#define REQUEST_BUFFER_LEN 1024
-
-struct client_request {
-	struct rtr_client *client;
-	unsigned char buffer[REQUEST_BUFFER_LEN];
-	size_t nread;
-};
+static struct thread_pool *request_handlers;
 
 enum poll_verdict {
 	PV_CONTINUE,
@@ -53,19 +58,10 @@ cleanup_server(struct rtr_server *server)
 }
 
 static void
-cleanup_client(struct rtr_client *client)
-{
-	if (client->fd != -1) {
-		shutdown(client->fd, SHUT_RDWR);
-		close(client->fd);
-	}
-}
-
-static void
 destroy_db(void)
 {
 	server_arraylist_cleanup(&servers, cleanup_server);
-	client_arraylist_cleanup(&clients, cleanup_client);
+	client_arraylist_cleanup(&clients, pdustream_destroy);
 }
 
 /*
@@ -77,31 +73,21 @@ destroy_db(void)
 static int
 parse_address(char const *full_address, char **address, char **service)
 {
-	char *ptr;
+	char const *ptr;
 	char *tmp_addr;
 	char *tmp_serv;
 	size_t tmp_addr_len;
 
 	if (full_address == NULL) {
 		tmp_addr = NULL;
-		tmp_serv = strdup(config_get_server_port());
-		if (tmp_serv == NULL)
-			return pr_enomem();
+		tmp_serv = pstrdup(config_get_server_port());
 		goto done;
 	}
 
 	ptr = strrchr(full_address, '#');
 	if (ptr == NULL) {
-		tmp_addr = strdup(full_address);
-		if (tmp_addr == NULL)
-			return pr_enomem();
-
-		tmp_serv = strdup(config_get_server_port());
-		if (tmp_serv == NULL) {
-			free(tmp_addr);
-			return pr_enomem();
-		}
-
+		tmp_addr = pstrdup(full_address);
+		tmp_serv = pstrdup(config_get_server_port());
 		goto done;
 	}
 
@@ -110,19 +96,12 @@ parse_address(char const *full_address, char **address, char **service)
 		    full_address);
 
 	tmp_addr_len = strlen(full_address) - strlen(ptr);
-	tmp_addr = malloc(tmp_addr_len + 1);
-	if (tmp_addr == NULL)
-		return pr_enomem();
+	tmp_addr = pmalloc(tmp_addr_len + 1);
 
 	memcpy(tmp_addr, full_address, tmp_addr_len);
 	tmp_addr[tmp_addr_len] = '\0';
 
-	tmp_serv = strdup(ptr + 1);
-	if (tmp_serv == NULL) {
-		free(tmp_addr);
-		return pr_enomem();
-	}
-
+	tmp_serv = pstrdup(ptr + 1);
 	/* Fall through */
 done:
 	*address = tmp_addr;
@@ -134,14 +113,12 @@ static int
 init_addrinfo(char const *hostname, char const *service,
     struct addrinfo **result)
 {
-	char *tmp;
 	struct addrinfo hints;
-	unsigned long parsed, port;
 	int error;
 
 	memset(&hints, 0 , sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
-	/* hints.ai_socktype = SOCK_DGRAM; */
+	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags |= AI_PASSIVE;
 
 	if (hostname != NULL)
@@ -155,30 +132,51 @@ init_addrinfo(char const *hostname, char const *service,
 		return error;
 	}
 
-	errno = 0;
-	parsed = strtoul(service, &tmp, 10);
-	if (errno || *tmp != '\0')
-		return 0; /* Ok, not a number */
-
-	/*
-	 * 'getaddrinfo' isn't very strict validating the service when a port
-	 * number is indicated. If a port larger than the max (65535) is
-	 * received, the 16 rightmost bits are utilized as the port and set at
-	 * the addrinfo returned.
-	 *
-	 * So, a manual validation is implemented. Port is actually a uint16_t,
-	 * so read what's necessary and compare using the same data type.
-	 */
-	port = (unsigned char)((*result)->ai_addr->sa_data[0]) << 8;
-	port += (unsigned char)((*result)->ai_addr->sa_data[1]);
-	if (parsed != port)
-		return pr_op_err("Service port %s is out of range (max value is %d)",
-		    service, USHRT_MAX);
-
 	return 0;
 }
 
+#ifdef __linux__
+
+static bool
+is_wildcard(struct sockaddr *sa)
+{
+	static const struct in6_addr wildcard6 = { 0 };
+	struct in_addr *addr4;
+	struct in6_addr *addr6;
+
+	switch (sa->sa_family) {
+	case AF_INET:
+		addr4 = &((struct sockaddr_in *) sa)->sin_addr;
+		return addr4->s_addr == 0;
+	case AF_INET6:
+		addr6 = &((struct sockaddr_in6 *) sa)->sin6_addr;
+		return addr6_equals(&wildcard6, addr6);
+	}
+
+	return false;
+}
+
+#endif
+
+static char *
+get_best_printable(struct addrinfo *addr, char const *input_addr)
+{
+	char str[INET6_ADDRSTRLEN];
+
+	if (sockaddr2str((struct sockaddr_storage *) addr->ai_addr, str))
+		return pstrdup(str);
+
+	if (input_addr != NULL)
+		return pstrdup(input_addr);
+
+	/* Failure is fine; this is just a nice-to-have. */
+	return NULL;
+}
+
 /*
+ * We want to listen to all sockets in one thread,
+ * so don't block.
+ *
  * By the way: man 2 poll says
  *
  * > The operation of poll() and ppoll() is not affected by the O_NONBLOCK flag.
@@ -215,109 +213,82 @@ set_nonblock(int fd)
  * from the clients.
  */
 static int
-create_server_socket(char const *input_addr, char const *hostname,
-    char const *service)
+create_server_socket(struct server_init_ctx *ctx, char const *hostname, char const *port)
 {
-	struct addrinfo *addrs;
-	struct addrinfo *addr;
-	unsigned long port;
-	int reuse;
-	int fd;
+	struct addrinfo *ais, *ai;
 	struct rtr_server server;
-	int error;
+	char const *errmsg;
+	static const int yes = 1;
+	int err;
 
-	reuse = 1;
+	err = init_addrinfo(hostname, port, &ais);
+	if (err)
+		return err;
 
-	error = init_addrinfo(hostname, service, &addrs);
-	if (error)
-		return error;
+	for (ai = ais; ai != NULL; ai = ai->ai_next) {
+#ifdef __linux__
+		if (is_wildcard(ai->ai_addr)) {
+			if (ctx->wildcard_found)
+				pr_op_warn("You have more than one wildcard address in server.address, and you're on Linux.\n"
+				    "On Linux, :: implies 0.0.0.0 by default, and you can't bind to 0.0.0.0 twice.\n"
+				    "The socket bind is probably going to fail.\n"
+				    "If you meant to bind to any address on both IPv4 and IPv6, you only need '::'.");
+			ctx->wildcard_found = true;
+		}
+#endif
 
-	if (addrs != NULL)
-		pr_op_info(
-		    "Attempting to bind socket to address '%s', port '%s'.",
-		    (addrs->ai_canonname != NULL) ? addrs->ai_canonname : "any",
-		    service);
+		server.fd = -1;
+		server.addr = get_best_printable(ai, ctx->input_addr);
+		pr_op_info("[%s]:%s: Setting up socket...", server.addr, port);
 
-	for (addr = addrs; addr != NULL; addr = addr->ai_next) {
-		fd = socket(addr->ai_family, SOCK_STREAM, 0);
-		if (fd < 0) {
-			pr_op_err("socket() failed: %s", strerror(errno));
-			continue;
+		server.fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+		if (server.fd < 0) {
+			err = errno;
+			errmsg = "Unable to create socket";
+			goto fail;
 		}
 
-		/*
-		 * We want to listen to all sockets in one thread,
-		 * so don't block.
-		 */
-		if (set_nonblock(fd) != 0) {
-			close(fd);
-			continue;
+		if ((err = set_nonblock(server.fd)) != 0) {
+			errmsg = "Unable to disable blocking on the socket";
+			goto fail;
 		}
 
-		/* enable SO_REUSEADDR */
-		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse,
-		    sizeof(int)) < 0) {
-			pr_op_err("setsockopt(SO_REUSEADDR) failed: %s",
-			    strerror(errno));
-			close(fd);
-			continue;
+		if (setsockopt(server.fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) < 0) {
+			err = errno;
+			errmsg = "Unable to enable SO_REUSEADDR on the socket";
+			goto fail;
 		}
 
-		/* enable SO_REUSEPORT */
-		if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse,
-		    sizeof(int)) < 0) {
-			pr_op_err("setsockopt(SO_REUSEPORT) failed: %s",
-			    strerror(errno));
-			close(fd);
-			continue;
+		if (bind(server.fd, ai->ai_addr, ai->ai_addrlen) < 0) {
+			err = errno;
+			errmsg = "Unable to bind the socket";
+			goto fail;
 		}
 
-		if (bind(fd, addr->ai_addr, addr->ai_addrlen) < 0) {
-			pr_op_err("bind() failed: %s", strerror(errno));
-			close(fd);
-			continue;
+		if (listen(server.fd, config_get_server_queue()) < 0) {
+			err = errno;
+			errmsg = "Unable to start listening on socket";
+			goto fail;
 		}
 
-		if (getsockname(fd, addr->ai_addr, &addr->ai_addrlen) != 0) {
-			error = errno;
-			close(fd);
-			freeaddrinfo(addrs);
-			pr_op_err("getsockname() failed: %s", strerror(error));
-			return error;
-		}
-
-		port = (unsigned char)(addr->ai_addr->sa_data[0]) << 8;
-		port += (unsigned char)(addr->ai_addr->sa_data[1]);
-		pr_op_info("Success; bound to address '%s', port '%ld'.",
-		    (addr->ai_canonname != NULL) ? addr->ai_canonname : "any",
-		    port);
-		freeaddrinfo(addrs);
-
-		if (listen(fd, config_get_server_queue()) != 0) {
-			error = errno;
-			close(fd);
-			pr_op_err("listen() failure: %s", strerror(error));
-			return error;
-		}
-
-		server.fd = fd;
-		/* Ignore failure; this is just a nice-to-have. */
-		server.addr = (input_addr != NULL) ? strdup(input_addr) : NULL;
-		error = server_arraylist_add(&servers, &server);
-		if (error) {
-			close(fd);
-			return error;
-		}
-
-		return 0; /* Happy path */
+		pr_op_info("[%s]:%s: Success.", server.addr, port);
+		server_arraylist_add(&servers, &server);
 	}
 
-	freeaddrinfo(addrs);
-	return pr_op_err("None of the addrinfo candidates could be bound.");
+	freeaddrinfo(ais);
+	return 0;
+
+fail:
+	pr_op_err("[%s]:%s: %s: %s", server.addr, port, errmsg, strerror(err));
+	if (server.fd != -1)
+		close(server.fd);
+	free(server.addr);
+	freeaddrinfo(ais);
+	return err;
 }
 
 static int
-init_server_fd(char const *input_addr)
+init_server_fd(struct server_init_ctx *ctx)
 {
 	char *address;
 	char *service;
@@ -326,11 +297,11 @@ init_server_fd(char const *input_addr)
 	address = NULL;
 	service = NULL;
 
-	error = parse_address(input_addr, &address, &service);
+	error = parse_address(ctx->input_addr, &address, &service);
 	if (error)
 		return error;
 
-	error = create_server_socket(input_addr, address, service);
+	error = create_server_socket(ctx, address, service);
 
 	free(address);
 	free(service);
@@ -341,6 +312,7 @@ init_server_fd(char const *input_addr)
 static int
 init_server_fds(void)
 {
+	struct server_init_ctx ctx = { 0 };
 	struct string_array const *conf_addrs;
 	unsigned int i;
 	int error;
@@ -348,10 +320,11 @@ init_server_fds(void)
 	conf_addrs = config_get_server_address();
 
 	if (conf_addrs->length == 0)
-		return init_server_fd(NULL);
+		return init_server_fd(&ctx);
 
 	for (i = 0; i < conf_addrs->length; i++) {
-		error = init_server_fd(conf_addrs->array[i]);
+		ctx.input_addr = conf_addrs->array[i];
+		error = init_server_fd(&ctx);
 		if (error)
 			return error; /* Cleanup happens outside */
 	}
@@ -362,19 +335,25 @@ init_server_fds(void)
 static void
 handle_client_request(void *arg)
 {
-	struct client_request *crequest = arg;
-	struct pdu_reader reader;
-	struct rtr_request rrequest;
-	struct pdu_metadata const *meta;
+	struct rtr_request *request = arg;
 
-	pdu_reader_init(&reader, crequest->buffer, crequest->nread);
-
-	while (pdu_load(&reader, crequest->client, &rrequest, &meta) == 0) {
-		meta->handle(crequest->client->fd, &rrequest);
-		meta->destructor(rrequest.pdu);
+	switch (request->pdu.type) {
+	case PDU_TYPE_SERIAL_QUERY:
+		handle_serial_query_pdu(request);
+		break;
+	case PDU_TYPE_RESET_QUERY:
+		handle_reset_query_pdu(request);
+		break;
+	default:
+		/* Should have been catched during constructor */
+		pr_crit("Unexpected PDU type: %u", request->pdu.type);
 	}
 
-	free(crequest);
+	if (request->eos)
+		/* Wake poller to close the socket */
+		shutdown(request->fd, SHUT_WR);
+
+	rtreq_destroy(request);
 }
 
 static void
@@ -443,116 +422,89 @@ accept_new_client(struct pollfd const *server_fd)
 {
 	struct sockaddr_storage client_addr;
 	socklen_t sizeof_client_addr;
-	struct rtr_client client;
+	int fd;
+	char addr[INET6_ADDRSTRLEN];
+	struct pdu_stream *client;
 	enum accept_verdict result;
 
 	sizeof_client_addr = sizeof(client_addr);
 
-	/* Accept the connection */
-	client.fd = accept(server_fd->fd, (struct sockaddr *) &client_addr,
+	fd = accept(server_fd->fd, (struct sockaddr *) &client_addr,
 	    &sizeof_client_addr);
 
-	result = handle_accept_result(client.fd, errno);
+	result = handle_accept_result(fd, errno);
 	if (result != AV_SUCCESS)
 		return result;
 
-	if (set_nonblock(client.fd) != 0) {
-		close(client.fd);
+	if (set_nonblock(fd) != 0) {
+		close(fd);
 		return AV_CLIENT_ERROR;
 	}
 
-	client.rtr_version = -1;
-	sockaddr2str(&client_addr, client.addr);
-	if (client_arraylist_add(&clients, &client) != 0) {
-		close(client.fd);
-		return AV_CLIENT_ERROR;
-	}
+	sockaddr2str(&client_addr, addr);
+	client = pdustream_create(fd, addr);
 
-	pr_op_info("Client accepted [FD: %d]: %s", client.fd, client.addr);
+	client_arraylist_add(&clients, &client);
+
+	pr_op_info("Client accepted [FD: %d]: %s", fd, addr);
 	return AV_SUCCESS;
 }
 
-/*
- * true: success.
- * false: oh noes; close socket.
- */
 static bool
-read_until_block(int fd, struct client_request *request)
+__handle_client_request(struct pdu_stream *stream)
 {
-	ssize_t read_result;
-	size_t offset;
-	int error;
+	struct rtr_request *request;
 
-	request->nread = 0;
-
-	for (offset = 0; offset < REQUEST_BUFFER_LEN; offset += read_result) {
-		read_result = read(fd, &request->buffer[offset],
-		    REQUEST_BUFFER_LEN - offset);
-		if (read_result == -1) {
-			error = errno;
-			if (error == EAGAIN || error == EWOULDBLOCK)
-				return true; /* Ok, we have the full packet. */
-
-			pr_op_err("Client socket read interrupted: %s",
-			    strerror(error));
-			return false;
-		}
-
-		if (read_result == 0) {
-			if (offset == 0) {
-				pr_op_debug("Client closed the socket.");
-				return false;
-			}
-
-			return true; /* Ok, we have the last packet. */
-		}
-
-		request->nread += read_result;
-	}
-
-	pr_op_warn("Peer's request is too big (>= %u bytes). Peer does not look like an RTR client; closing connection.",
-	    REQUEST_BUFFER_LEN);
-	return false;
-}
-
-static bool
-__handle_client_request(struct rtr_client *client)
-{
-	struct client_request *request;
-	int error;
-
-	request = malloc(sizeof(struct client_request));
-	if (request == NULL) {
-		pr_enomem();
+	if (!pdustream_next(stream, &request))
 		return false;
-	}
 
-	request->client = client;
-	if (!read_until_block(client->fd, request))
-		goto cancel;
+	if (request == NULL)
+		return true;
 
-	pr_op_debug("Client sent %zu bytes.", request->nread);
-	error = thread_pool_push(request_handlers, "RTR request",
-	    handle_client_request, request);
-	if (error)
-		goto cancel;
-
+	thread_pool_push(request_handlers, "RTR request", handle_client_request,
+	    request);
 	return true;
-
-cancel:
-	free(request);
-	return false;
 }
 
 static void
 print_poll_failure(struct pollfd *pfd, char const *what, char const *addr)
 {
-	if (pfd->revents & POLLHUP)
-		pr_op_err("%s '%s' down: POLLHUP (Peer hung up)", what, addr);
-	if (pfd->revents & POLLERR)
-		pr_op_err("%s '%s' down: POLLERR (Generic error)", what, addr);
-	if (pfd->revents & POLLNVAL)
-		pr_op_err("%s '%s' down: POLLNVAL (fd not open)", what, addr);
+	/*
+	 * Note, POLLHUP and POLLER are implemented somewhat differently across
+	 * the board: http://www.greenend.org.uk/rjk/tech/poll.html
+	 */
+
+	if (pfd->revents & POLLHUP) {
+		/* Normal; we don't have control over the client. */
+		pr_op_info("%s '%s' down: Peer hung up. (Revents 0x%02x)",
+		    what, addr, pfd->revents);
+	}
+	if (pfd->revents & POLLERR) {
+		/*
+		 * The documentation of this one stinks. The UNIX spec and
+		 * OpenBSD mostly unhelpfully define it as "An error has
+		 * occurred," and Linux appends "read end has been closed"
+		 * (which doesn't seem standard).
+		 *
+		 * I often get it when the client closes the socket while the
+		 * handler thread is sending it data (Making it a synonym to
+		 * POLLHUP in this case), so we can't make too much of a fuss
+		 * when it shows up.
+		 *
+		 * Warning it is.
+		 */
+		pr_op_warn("%s '%s' down: Generic error. (Revents 0x%02x)",
+		    what, addr, pfd->revents);
+	}
+	if (pfd->revents & POLLNVAL) {
+		/*
+		 * Definitely suggests a programming error.
+		 * We're the main polling thread, so nobody else should be
+		 * closing sockets on us.
+		 */
+		pr_op_err("%s '%s' down: File Descriptor closed. (Revents 0x%02x)",
+		    what, addr, pfd->revents);
+	}
 }
 
 static void
@@ -562,7 +514,7 @@ delete_dead_clients(void)
 	unsigned int dst;
 
 	for (src = 0, dst = 0; src < clients.len; src++) {
-		if (clients.array[src].fd != -1) {
+		if (clients.array[src] != NULL) {
 			clients.array[dst] = clients.array[src];
 			dst++;
 		}
@@ -576,7 +528,7 @@ apply_pollfds(struct pollfd *pollfds, unsigned int nclients)
 {
 	struct pollfd *pfd;
 	struct rtr_server *server;
-	struct rtr_client *client;
+	struct pdu_stream *client;
 	unsigned int i;
 
 	for (i = 0; i < servers.len; i++) {
@@ -586,22 +538,22 @@ apply_pollfds(struct pollfd *pollfds, unsigned int nclients)
 		/* PR_DEBUG_MSG("pfd:%d server:%d", pfd->fd, server->fd); */
 
 		if ((pfd->fd == -1) && (server->fd != -1)) {
+			print_poll_failure(pfd, "Server", server->addr);
 			close(server->fd);
 			server->fd = -1;
-			print_poll_failure(pfd, "Server", server->addr);
 		}
 	}
 
 	for (i = 0; i < nclients; i++) {
 		pfd = &pollfds[servers.len + i];
-		client = &clients.array[i];
+		client = clients.array[i];
 
 		/* PR_DEBUG_MSG("pfd:%d client:%d", pfd->fd, client->fd); */
 
-		if ((pfd->fd == -1) && (client->fd != -1)) {
-			close(client->fd);
-			client->fd = -1;
-			print_poll_failure(pfd, "Client", client->addr);
+		if ((pfd->fd == -1) && (pdustream_fd(client) != -1)) {
+			print_poll_failure(pfd, "Client", pdustream_addr(client));
+			pdustream_destroy(&client);
+			clients.array[i] = NULL;
 		}
 	}
 
@@ -612,25 +564,17 @@ static enum poll_verdict
 fddb_poll(void)
 {
 	struct pollfd *pollfds; /* array */
-
-	struct rtr_server *server;
-	struct rtr_client *client;
 	struct pollfd *fd;
-
 	unsigned int nclients;
 	unsigned int i;
 	int error;
 
-	pollfds = calloc(servers.len + clients.len, sizeof(struct pollfd));
-	if (pollfds == NULL) {
-		pr_enomem();
-		return PV_RETRY;
-	}
+	pollfds = pcalloc(servers.len + clients.len, sizeof(struct pollfd));
 
-	ARRAYLIST_FOREACH(&servers, server, i)
-		init_pollfd(&pollfds[i], server->fd);
-	ARRAYLIST_FOREACH(&clients, client, i)
-		init_pollfd(&pollfds[servers.len + i], client->fd);
+	ARRAYLIST_FOREACH_IDX(&servers, i)
+		init_pollfd(&pollfds[i], servers.array[i].fd);
+	ARRAYLIST_FOREACH_IDX(&clients, i)
+		init_pollfd(&pollfds[servers.len + i], pdustream_fd(clients.array[i]));
 
 	error = poll(pollfds, servers.len + clients.len, 1000);
 
@@ -647,8 +591,7 @@ fddb_poll(void)
 			pr_op_info("poll() was interrupted by some signal.");
 			goto stop;
 		case ENOMEM:
-			pr_enomem();
-			/* Fall through */
+			enomem_panic();
 		case EAGAIN:
 			goto retry;
 		case EFAULT:
@@ -657,7 +600,7 @@ fddb_poll(void)
 		}
 	}
 
-	/* The servers might change this number, so store a backup. */
+	/* accept_new_client() might change this number, so store a backup. */
 	nclients = clients.len;
 
 	/* New connections */
@@ -693,13 +636,10 @@ fddb_poll(void)
 		/* PR_DEBUG_MSG("Client %u: fd:%d revents:%x", i, fd->fd,
 		    fd->revents); */
 
-		if (fd->fd == -1)
-			continue;
-
 		if (fd->revents & (POLLHUP | POLLERR | POLLNVAL)) {
 			fd->fd = -1;
 		} else if (fd->revents & POLLIN) {
-			if (!__handle_client_request(&clients.array[i]))
+			if (!__handle_client_request(clients.array[i]))
 				fd->fd = -1;
 		}
 	}
@@ -707,6 +647,8 @@ fddb_poll(void)
 	mutex_lock(&lock);
 	apply_pollfds(pollfds, nclients);
 	mutex_unlock(&lock);
+
+	stats_gauge_set(stat_rtr_connections, clients.len);
 	/* Fall through */
 
 success:
@@ -783,24 +725,29 @@ void rtr_stop(void)
 	destroy_db();
 }
 
-int
-rtr_foreach_client(rtr_foreach_client_cb cb, void *arg)
+void
+rtr_notify(void)
 {
-	struct rtr_client *client;
-	unsigned int i;
-	int error = 0;
+	serial_t serial;
+	struct pdu_stream **client;
+	int fd;
+	int error;
+
+	error = get_last_serial_number(&serial);
+	if (error) {
+		pr_op_info("Can't notify RTR clients: %d (%s)", error,
+		    strerror(abs(error)));
+		return;
+	}
 
 	mutex_lock(&lock);
 
-	ARRAYLIST_FOREACH(&clients, client, i) {
-		if (client->fd != -1) {
-			error = cb(client, arg);
-			if (error)
-				break;
-		}
+	ARRAYLIST_FOREACH(&clients, client) {
+		fd = pdustream_fd(*client);
+		if (fd != -1)
+			send_serial_notify_pdu(fd, pdustream_version(*client),
+			    serial);
 	}
 
 	mutex_unlock(&lock);
-
-	return error;
 }
